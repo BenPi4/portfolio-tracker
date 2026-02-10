@@ -1,7 +1,6 @@
 import pandas as pd
 import yfinance as yf
 from datetime import datetime
-import requests
 
 # --- 1. Cash Balance ---
 def calculate_cash_balance(transactions_df):
@@ -57,7 +56,6 @@ def get_current_holdings(transactions_df):
             holdings[ticker]['total_qty'] += qty
             holdings[ticker]['total_cost'] += qty * price
             
-            # Track first purchase date
             current_date = pd.to_datetime(row['Date'])
             if holdings[ticker]['first_buy_date'] is None:
                 holdings[ticker]['first_buy_date'] = current_date
@@ -88,68 +86,63 @@ def get_current_holdings(transactions_df):
     
     return pd.DataFrame(holdings_list) if holdings_list else pd.DataFrame()
 
-# --- 3. Live Prices (With Browser Simulation) ---
+# --- 3. Live Prices (The Fix: Bulk Download) ---
 def fetch_live_prices(tickers):
+    """Fetch prices using yf.download which is more robust against blocking."""
     price_data = {}
     if not tickers:
         return price_data
     
-    # Create a session to fool Yahoo into thinking we are a browser
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    })
-
-    for ticker in tickers:
-        try:
-            stock = yf.Ticker(ticker, session=session)
+    try:
+        # This method is the "nuclear option" - usually bypasses blocks
+        data = yf.download(tickers, period="1d", progress=False)
+        
+        # Handling yfinance's complex DataFrame structure
+        # Sometimes it returns a MultiIndex, sometimes a single index
+        if 'Close' in data.columns:
+            close_data = data['Close']
             
-            # Try getting price
-            try:
-                price = stock.fast_info.last_price
-            except:
-                price = None
-
-            if price is None:
-                hist = stock.history(period='1d')
-                if not hist.empty:
-                    price = hist['Close'].iloc[-1]
-                else:
+            for ticker in tickers:
+                try:
                     price = 0.0
+                    # Case 1: Multiple tickers (DataFrame)
+                    if isinstance(close_data, pd.DataFrame) and ticker in close_data.columns:
+                        val = close_data[ticker].iloc[-1]
+                        price = float(val)
+                    # Case 2: Single ticker (Series)
+                    elif isinstance(close_data, pd.Series):
+                        # If we asked for 1 ticker, the series IS that ticker
+                        price = float(close_data.iloc[-1])
+                    
+                    price_data[ticker] = {
+                        'price': price,
+                        'prev_close': price, # Simplified for robustness
+                        'sector': 'Unknown'
+                    }
+                except Exception as e:
+                    # Keep 0 if failed
+                    price_data[ticker] = {'price': 0.0, 'prev_close': 0.0, 'sector': 'Unknown'}
 
-            # Try getting sector
-            try:
-                sector = stock.info.get('sector', 'Unknown')
-            except:
-                sector = 'Unknown'
-
-            final_price = float(price) if price else 0.0
-            
-            price_data[ticker] = {
-                'price': final_price,
-                'prev_close': final_price, 
-                'sector': sector
-            }
-            
-        except:
-            price_data[ticker] = {
-                'price': 0.0,
-                'prev_close': 0.0,
-                'sector': 'Unknown'
-            }
+        else:
+            # Fallback: Maybe data structure is flat (older yfinance versions)
+            for ticker in tickers:
+                price_data[ticker] = {'price': 0.0, 'prev_close': 0.0, 'sector': 'Unknown'}
+                
+    except Exception as e:
+        print(f"Bulk download failed: {e}")
+        for ticker in tickers:
+            price_data[ticker] = {'price': 0.0, 'prev_close': 0.0, 'sector': 'Unknown'}
     
     return price_data
 
 # --- Helper for SPY ---
 def calculate_spy_return(start_date):
     try:
-        session = requests.Session()
-        session.headers.update({'User-Agent': 'Mozilla/5.0'})
-        spy = yf.Ticker('SPY', session=session)
-        hist = spy.history(start=start_date)
-        if hist.empty: return 0.0
-        start_p = hist['Close'].iloc[0]
-        end_p = hist['Close'].iloc[-1]
+        # Use download here too for consistency
+        data = yf.download('SPY', start=start_date, progress=False)['Close']
+        if data.empty: return 0.0
+        start_p = float(data.iloc[0])
+        end_p = float(data.iloc[-1])
         return ((end_p - start_p) / start_p) * 100
     except:
         return 0.0
