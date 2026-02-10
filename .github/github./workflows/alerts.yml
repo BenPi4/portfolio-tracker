@@ -1,0 +1,37 @@
+name: Price Alerts Checker
+
+on:
+  schedule:
+    # Run every hour during market hours (9 AM - 4 PM EST)
+    # Cron is in UTC, so adjust accordingly (EST = UTC-5, EDT = UTC-4)
+    - cron: '0 14-21 * * 1-5'  # Mon-Fri, 9 AM - 4 PM EST (approx)
+  
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  check-alerts:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Run alerts checker
+      env:
+        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        GOOGLE_SHEET_NAME: ${{ secrets.GOOGLE_SHEET_NAME }}
+        GMAIL_SENDER: ${{ secrets.GMAIL_SENDER }}
+        GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+      run: |
+        python alerts.py
