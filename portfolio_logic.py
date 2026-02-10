@@ -87,65 +87,81 @@ def get_current_holdings(transactions_df):
     
     return pd.DataFrame(holdings_list) if holdings_list else pd.DataFrame()
 
-# --- 3. Live Prices & Metadata (The Fix) ---
+# --- 3. Live Prices (The Hybrid Bulletproof Fix) ---
 def fetch_live_prices(tickers):
-    """Fetch price, previous close, and sector using robust methods."""
+    """
+    Fetches 5 days of history in bulk to guarantee Prices + Daily Returns.
+    Only attempts Sector individually (and fails silently if needed).
+    """
     price_data = {}
     if not tickers:
         return price_data
     
-    # Session to mimic browser
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    })
-
-    for ticker in tickers:
-        # Default values
-        current_price = 0.0
-        prev_close = 0.0
-        sector = 'Unknown'
+    try:
+        # 1. BULK DOWNLOAD - This guarantees we get prices (like before)
+        # We ask for 5 days to handle weekends/holidays easily
+        data = yf.download(tickers, period="5d", progress=False)
         
-        try:
-            stock = yf.Ticker(ticker, session=session)
+        # Check if we got data
+        if 'Close' in data.columns:
+            closes = data['Close']
             
-            # A. Try fast_info first (Best for Price & Prev Close)
-            try:
-                current_price = stock.fast_info.last_price
-                prev_close = stock.fast_info.previous_close
-            except:
-                pass
-            
-            # Fallback if fast_info fails
-            if current_price == 0 or current_price is None:
-                hist = stock.history(period='2d') # Get 2 days to find prev close
-                if not hist.empty:
-                    current_price = hist['Close'].iloc[-1]
-                    if len(hist) > 1:
-                        prev_close = hist['Close'].iloc[-2]
+            for ticker in tickers:
+                current_price = 0.0
+                prev_close = 0.0
+                sector = 'Unknown'
+                
+                # --- A. Get Price & Daily Return from Bulk Data ---
+                try:
+                    # Handle Single Ticker vs Multiple Tickers structure
+                    if isinstance(closes, pd.Series):
+                        ticker_history = closes # It is just one series
+                    elif isinstance(closes, pd.DataFrame) and ticker in closes.columns:
+                        ticker_history = closes[ticker]
                     else:
-                        prev_close = current_price # Avoid division by zero
-            
-            # B. Try to get Sector (This is a separate call)
-            try:
-                # We try to get info, but if it fails/times out, we skip
-                info = stock.info
-                sector = info.get('sector', 'Unknown')
-                # Sometimes sector is missing, try category or industry
-                if sector == 'Unknown':
-                    sector = info.get('category', 'Unknown')
-            except:
-                pass # Sector is not critical, don't crash
+                        ticker_history = pd.Series()
 
-            # Save data
-            price_data[ticker] = {
-                'price': float(current_price) if current_price else 0.0,
-                'prev_close': float(prev_close) if prev_close else 0.0,
-                'sector': sector
-            }
-            
-        except Exception as e:
-            print(f"Error fetching {ticker}: {e}")
+                    # Drop NaNs to get real trading days
+                    ticker_history = ticker_history.dropna()
+                    
+                    if not ticker_history.empty:
+                        current_price = float(ticker_history.iloc[-1])
+                        
+                        if len(ticker_history) >= 2:
+                            prev_close = float(ticker_history.iloc[-2])
+                        else:
+                            prev_close = current_price # Fallback
+                except:
+                    # If parsing failed, keep 0
+                    pass
+                
+                # --- B. Get Sector (Optional - Don't crash price if this fails) ---
+                if current_price > 0:
+                    try:
+                        # We use a trick: only fetch info if we already succeeded in getting price
+                        # This minimizes API calls.
+                        info = yf.Ticker(ticker).info
+                        sector = info.get('sector', 'Unknown')
+                        if sector == 'Unknown':
+                            sector = info.get('category', 'Unknown')
+                    except:
+                        pass # Sector remains 'Unknown', but PRICE IS SAFE
+                
+                # Store Data
+                price_data[ticker] = {
+                    'price': current_price,
+                    'prev_close': prev_close,
+                    'sector': sector
+                }
+        else:
+            # Structure unexpected
+            for ticker in tickers:
+                price_data[ticker] = {'price': 0.0, 'prev_close': 0.0, 'sector': 'Unknown'}
+                
+    except Exception as e:
+        print(f"Critical Error in fetch_live_prices: {e}")
+        # Emergency fallback
+        for ticker in tickers:
             price_data[ticker] = {'price': 0.0, 'prev_close': 0.0, 'sector': 'Unknown'}
     
     return price_data
@@ -153,13 +169,10 @@ def fetch_live_prices(tickers):
 # --- Helper for SPY ---
 def calculate_spy_return(start_date):
     try:
-        session = requests.Session()
-        session.headers.update({'User-Agent': 'Mozilla/5.0'})
-        spy = yf.Ticker('SPY', session=session)
-        hist = spy.history(start=start_date)
-        if hist.empty: return 0.0
-        start_p = hist['Close'].iloc[0]
-        end_p = hist['Close'].iloc[-1]
+        data = yf.download('SPY', start=start_date, progress=False)['Close']
+        if data.empty: return 0.0
+        start_p = float(data.iloc[0])
+        end_p = float(data.iloc[-1])
         return ((end_p - start_p) / start_p) * 100
     except:
         return 0.0
@@ -202,7 +215,7 @@ def build_portfolio_table(holdings_df, price_data, cash_balance):
             'Current Price': curr,
             'Market Value': market_value,
             'Total Return %': total_return_pct,
-            'Daily Return %': daily_return_pct, # Now using real data
+            'Daily Return %': daily_return_pct, 
             'Alpha vs SPY': alpha,
             'Sector': data.get('sector', 'Unknown')
         })
@@ -226,7 +239,7 @@ def calculate_portfolio_metrics(portfolio_df, cash_balance, transactions_df):
         daily_pnl = 0.0
     else:
         mkt_val = portfolio_df['Market Value'].sum()
-        # Calculate Real Daily P&L ($) based on daily return %
+        # Daily PnL based on the daily return % we calculated
         daily_pnl = (portfolio_df['Market Value'] * (portfolio_df['Daily Return %'] / 100)).sum()
     
     invested = 0.0
