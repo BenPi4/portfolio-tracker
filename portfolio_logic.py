@@ -266,10 +266,10 @@ def calculate_portfolio_metrics(portfolio_df, cash_balance, transactions_df):
         'daily_pnl': daily_pnl
     }
 
-# --- 6. Historical Performance Calculation ---
+# --- 6. Historical Performance Calculation (The "Safe Loop" Fix) ---
 def calculate_historical_portfolio_value(transactions_df, start_date, end_date=None):
     """
-    Reconstruct daily portfolio value from transaction history and compare with SPY.
+    Reconstruct daily portfolio value using a safe loop to avoid blocks.
     """
     if transactions_df.empty:
         return pd.DataFrame()
@@ -277,53 +277,73 @@ def calculate_historical_portfolio_value(transactions_df, start_date, end_date=N
     if end_date is None:
         end_date = datetime.now()
 
-    # 1. Identify all tickers ever held (excluding CASH)
+    # 1. Prepare Tickers
     tickers = transactions_df['Ticker'].unique().tolist()
     if 'CASH' in tickers:
         tickers.remove('CASH')
     
-    # If no stock tickers, return empty
-    if not tickers:
+    # Always add SPY for comparison
+    if 'SPY' not in tickers:
+        tickers.append('SPY')
+
+    # 2. Setup "Browser" Session (The Anti-Block Trick)
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    })
+
+    # 3. Fetch History for each ticker individually
+    # This is safer than bulk download which gets blocked easily
+    price_data = pd.DataFrame()
+    
+    # Buffer start date by 10 days to ensure we cover the start
+    safe_start = pd.to_datetime(start_date) - timedelta(days=10)
+    
+    for ticker in tickers:
+        try:
+            stock = yf.Ticker(ticker, session=session)
+            hist = stock.history(start=safe_start, end=end_date)
+            
+            if not hist.empty:
+                # We only need the Close price
+                # We rename the column to the ticker name to merge later
+                ticker_close = hist[['Close']].rename(columns={'Close': ticker})
+                
+                # Remove timezone info to avoid merge errors
+                ticker_close.index = ticker_close.index.tz_localize(None)
+                
+                if price_data.empty:
+                    price_data = ticker_close
+                else:
+                    # Merge on Date index
+                    price_data = price_data.join(ticker_close, how='outer')
+        except Exception as e:
+            print(f"Failed to load history for {ticker}: {e}")
+
+    # If we failed to get any data (or only got SPY and no stocks), return empty
+    if price_data.empty:
         return pd.DataFrame()
 
-    # 2. Download historical data (Bulk)
-    # We add SPY for comparison
-    download_tickers = tickers + ['SPY']
-    
-    try:
-        # Buffer start date by a few days to ensure we have data
-        data_start = start_date - timedelta(days=5)
-        
-        # Download all at once
-        price_data = yf.download(download_tickers, start=data_start, end=end_date, progress=False)['Close']
-        
-        # Handle case where only 1 ticker (+SPY) makes it not a MultiIndex or different structure
-        if isinstance(price_data, pd.Series):
-             price_data = price_data.to_frame()
-             
-    except Exception as e:
-        print(f"History download failed: {e}")
-        return pd.DataFrame()
-
-    # 3. Reconstruct Portfolio Value Day by Day
-    # This loop runs for every trading day in the range
-    
+    # 4. Reconstruct Portfolio Value
+    # Sort dates and transactions
+    price_data = price_data.sort_index()
     dates = price_data.index
-    history_records = []
-    
-    # Sort transactions for correct timeline processing
     trans_sorted = transactions_df.sort_values('Date')
     
+    history_records = []
+    
     for date in dates:
-        # Filter transactions that happened on or before this date
+        # Only look at transactions up to this specific day
         current_trans = trans_sorted[trans_sorted['Date'] <= date]
         
+        # If no transactions happened yet, value is 0
         if current_trans.empty:
             continue
             
-        # Calculate Cash & Holdings for this specific date
-        # Note: We reuse our existing functions but on the filtered data
+        # Calculate Cash at this point in time
         cash = calculate_cash_balance(current_trans)
+        
+        # Calculate Holdings at this point in time
         holdings = get_current_holdings(current_trans)
         
         portfolio_val = cash
@@ -333,49 +353,47 @@ def calculate_historical_portfolio_value(transactions_df, start_date, end_date=N
                 t = row['Ticker']
                 q = row['Qty']
                 
-                # Get price for this date
+                # Try to get price for this day
                 if t in price_data.columns:
                     price = price_data.loc[date, t]
                     
-                    # Handle missing data (NaN) - use previous known price
+                    # Fill NaN with previous value (Forward Fill logic)
                     if pd.isna(price):
-                        try:
-                            # Try to find last valid price up to this date
-                            valid_prices = price_data[t].loc[:date].dropna()
-                            if not valid_prices.empty:
-                                price = valid_prices.iloc[-1]
-                            else:
-                                price = 0.0
-                        except:
+                        # Look back up to 5 days
+                        prev_days = price_data[t].loc[:date].tail(5).dropna()
+                        if not prev_days.empty:
+                            price = prev_days.iloc[-1]
+                        else:
                             price = 0.0
-                    
+                            
                     portfolio_val += float(q) * float(price)
         
-        # Get SPY price for comparison
+        # Get SPY value
         spy_val = 0.0
         if 'SPY' in price_data.columns:
             spy_val = price_data.loc[date, 'SPY']
-            if pd.isna(spy_val): # Handle SPY gaps
-                 valid_spy = price_data['SPY'].loc[:date].dropna()
-                 if not valid_spy.empty:
-                     spy_val = valid_spy.iloc[-1]
-            
+            if pd.isna(spy_val):
+                 prev_spy = price_data['SPY'].loc[:date].tail(5).dropna()
+                 if not prev_spy.empty:
+                     spy_val = prev_spy.iloc[-1]
+
         history_records.append({
             'Date': date,
             'Portfolio_Value': portfolio_val,
             'SPY_Price': spy_val
         })
     
+    # 5. Final Formatting
     history_df = pd.DataFrame(history_records)
     
     if history_df.empty:
         return pd.DataFrame()
-        
-    # 4. Calculate Cumulative Returns (%)
-    # Normalize to 0% at start of the chart period
+
+    # Calculate returns relative to the FIRST day of the chart
     initial_port = history_df['Portfolio_Value'].iloc[0]
     initial_spy = history_df['SPY_Price'].iloc[0]
     
+    # Protect against division by zero
     if initial_port > 0:
         history_df['Portfolio_Return_%'] = (history_df['Portfolio_Value'] - initial_port) / initial_port * 100
     else:
