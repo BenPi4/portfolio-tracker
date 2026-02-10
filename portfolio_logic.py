@@ -1,6 +1,6 @@
 import pandas as pd
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta  # התיקון נמצא כאן
 import requests
 
 # --- 1. Cash Balance ---
@@ -98,8 +98,7 @@ def fetch_live_prices(tickers):
         return price_data
     
     try:
-        # 1. BULK DOWNLOAD - This guarantees we get prices (like before)
-        # We ask for 5 days to handle weekends/holidays easily
+        # 1. BULK DOWNLOAD - This guarantees we get prices
         data = yf.download(tickers, period="5d", progress=False)
         
         # Check if we got data
@@ -113,15 +112,13 @@ def fetch_live_prices(tickers):
                 
                 # --- A. Get Price & Daily Return from Bulk Data ---
                 try:
-                    # Handle Single Ticker vs Multiple Tickers structure
                     if isinstance(closes, pd.Series):
-                        ticker_history = closes # It is just one series
+                        ticker_history = closes
                     elif isinstance(closes, pd.DataFrame) and ticker in closes.columns:
                         ticker_history = closes[ticker]
                     else:
                         ticker_history = pd.Series()
 
-                    # Drop NaNs to get real trading days
                     ticker_history = ticker_history.dropna()
                     
                     if not ticker_history.empty:
@@ -130,22 +127,19 @@ def fetch_live_prices(tickers):
                         if len(ticker_history) >= 2:
                             prev_close = float(ticker_history.iloc[-2])
                         else:
-                            prev_close = current_price # Fallback
+                            prev_close = current_price
                 except:
-                    # If parsing failed, keep 0
                     pass
                 
-                # --- B. Get Sector (Optional - Don't crash price if this fails) ---
+                # --- B. Get Sector (Optional) ---
                 if current_price > 0:
                     try:
-                        # We use a trick: only fetch info if we already succeeded in getting price
-                        # This minimizes API calls.
                         info = yf.Ticker(ticker).info
                         sector = info.get('sector', 'Unknown')
                         if sector == 'Unknown':
                             sector = info.get('category', 'Unknown')
                     except:
-                        pass # Sector remains 'Unknown', but PRICE IS SAFE
+                        pass
                 
                 # Store Data
                 price_data[ticker] = {
@@ -154,13 +148,11 @@ def fetch_live_prices(tickers):
                     'sector': sector
                 }
         else:
-            # Structure unexpected
             for ticker in tickers:
                 price_data[ticker] = {'price': 0.0, 'prev_close': 0.0, 'sector': 'Unknown'}
                 
     except Exception as e:
         print(f"Critical Error in fetch_live_prices: {e}")
-        # Emergency fallback
         for ticker in tickers:
             price_data[ticker] = {'price': 0.0, 'prev_close': 0.0, 'sector': 'Unknown'}
     
@@ -194,10 +186,10 @@ def build_portfolio_table(holdings_df, price_data, cash_balance):
         
         market_value = qty * curr
         
-        # Total Return: (Current - Avg Buy) / Avg Buy
+        # Total Return
         total_return_pct = ((curr - avg) / avg * 100) if avg > 0 else 0
         
-        # Daily Return: (Current - Prev Close) / Prev Close
+        # Daily Return
         daily_return_pct = 0.0
         if prev > 0:
             daily_return_pct = ((curr - prev) / prev * 100)
@@ -239,7 +231,6 @@ def calculate_portfolio_metrics(portfolio_df, cash_balance, transactions_df):
         daily_pnl = 0.0
     else:
         mkt_val = portfolio_df['Market Value'].sum()
-        # Daily PnL based on the daily return % we calculated
         daily_pnl = (portfolio_df['Market Value'] * (portfolio_df['Daily Return %'] / 100)).sum()
     
     invested = 0.0
@@ -293,10 +284,9 @@ def calculate_historical_portfolio_value(transactions_df, start_date, end_date=N
     })
 
     # 3. Fetch History for each ticker individually
-    # This is safer than bulk download which gets blocked easily
     price_data = pd.DataFrame()
     
-    # Buffer start date by 10 days to ensure we cover the start
+    # Buffer start date by 10 days
     safe_start = pd.to_datetime(start_date) - timedelta(days=10)
     
     for ticker in tickers:
@@ -305,27 +295,20 @@ def calculate_historical_portfolio_value(transactions_df, start_date, end_date=N
             hist = stock.history(start=safe_start, end=end_date)
             
             if not hist.empty:
-                # We only need the Close price
-                # We rename the column to the ticker name to merge later
                 ticker_close = hist[['Close']].rename(columns={'Close': ticker})
-                
-                # Remove timezone info to avoid merge errors
                 ticker_close.index = ticker_close.index.tz_localize(None)
                 
                 if price_data.empty:
                     price_data = ticker_close
                 else:
-                    # Merge on Date index
                     price_data = price_data.join(ticker_close, how='outer')
         except Exception as e:
             print(f"Failed to load history for {ticker}: {e}")
 
-    # If we failed to get any data (or only got SPY and no stocks), return empty
     if price_data.empty:
         return pd.DataFrame()
 
     # 4. Reconstruct Portfolio Value
-    # Sort dates and transactions
     price_data = price_data.sort_index()
     dates = price_data.index
     trans_sorted = transactions_df.sort_values('Date')
@@ -333,17 +316,12 @@ def calculate_historical_portfolio_value(transactions_df, start_date, end_date=N
     history_records = []
     
     for date in dates:
-        # Only look at transactions up to this specific day
         current_trans = trans_sorted[trans_sorted['Date'] <= date]
         
-        # If no transactions happened yet, value is 0
         if current_trans.empty:
             continue
             
-        # Calculate Cash at this point in time
         cash = calculate_cash_balance(current_trans)
-        
-        # Calculate Holdings at this point in time
         holdings = get_current_holdings(current_trans)
         
         portfolio_val = cash
@@ -353,13 +331,10 @@ def calculate_historical_portfolio_value(transactions_df, start_date, end_date=N
                 t = row['Ticker']
                 q = row['Qty']
                 
-                # Try to get price for this day
                 if t in price_data.columns:
                     price = price_data.loc[date, t]
                     
-                    # Fill NaN with previous value (Forward Fill logic)
                     if pd.isna(price):
-                        # Look back up to 5 days
                         prev_days = price_data[t].loc[:date].tail(5).dropna()
                         if not prev_days.empty:
                             price = prev_days.iloc[-1]
@@ -368,7 +343,6 @@ def calculate_historical_portfolio_value(transactions_df, start_date, end_date=N
                             
                     portfolio_val += float(q) * float(price)
         
-        # Get SPY value
         spy_val = 0.0
         if 'SPY' in price_data.columns:
             spy_val = price_data.loc[date, 'SPY']
@@ -389,11 +363,9 @@ def calculate_historical_portfolio_value(transactions_df, start_date, end_date=N
     if history_df.empty:
         return pd.DataFrame()
 
-    # Calculate returns relative to the FIRST day of the chart
     initial_port = history_df['Portfolio_Value'].iloc[0]
     initial_spy = history_df['SPY_Price'].iloc[0]
     
-    # Protect against division by zero
     if initial_port > 0:
         history_df['Portfolio_Return_%'] = (history_df['Portfolio_Value'] - initial_port) / initial_port * 100
     else:
