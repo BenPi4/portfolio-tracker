@@ -1,6 +1,7 @@
 import pandas as pd
 import yfinance as yf
 from datetime import datetime
+import requests
 
 # --- 1. Cash Balance ---
 def calculate_cash_balance(transactions_df):
@@ -86,51 +87,65 @@ def get_current_holdings(transactions_df):
     
     return pd.DataFrame(holdings_list) if holdings_list else pd.DataFrame()
 
-# --- 3. Live Prices (The Fix: Bulk Download) ---
+# --- 3. Live Prices & Metadata (The Fix) ---
 def fetch_live_prices(tickers):
-    """Fetch prices using yf.download which is more robust against blocking."""
+    """Fetch price, previous close, and sector using robust methods."""
     price_data = {}
     if not tickers:
         return price_data
     
-    try:
-        # This method is the "nuclear option" - usually bypasses blocks
-        data = yf.download(tickers, period="1d", progress=False)
-        
-        # Handling yfinance's complex DataFrame structure
-        # Sometimes it returns a MultiIndex, sometimes a single index
-        if 'Close' in data.columns:
-            close_data = data['Close']
-            
-            for ticker in tickers:
-                try:
-                    price = 0.0
-                    # Case 1: Multiple tickers (DataFrame)
-                    if isinstance(close_data, pd.DataFrame) and ticker in close_data.columns:
-                        val = close_data[ticker].iloc[-1]
-                        price = float(val)
-                    # Case 2: Single ticker (Series)
-                    elif isinstance(close_data, pd.Series):
-                        # If we asked for 1 ticker, the series IS that ticker
-                        price = float(close_data.iloc[-1])
-                    
-                    price_data[ticker] = {
-                        'price': price,
-                        'prev_close': price, # Simplified for robustness
-                        'sector': 'Unknown'
-                    }
-                except Exception as e:
-                    # Keep 0 if failed
-                    price_data[ticker] = {'price': 0.0, 'prev_close': 0.0, 'sector': 'Unknown'}
+    # Session to mimic browser
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    })
 
-        else:
-            # Fallback: Maybe data structure is flat (older yfinance versions)
-            for ticker in tickers:
-                price_data[ticker] = {'price': 0.0, 'prev_close': 0.0, 'sector': 'Unknown'}
-                
-    except Exception as e:
-        print(f"Bulk download failed: {e}")
-        for ticker in tickers:
+    for ticker in tickers:
+        # Default values
+        current_price = 0.0
+        prev_close = 0.0
+        sector = 'Unknown'
+        
+        try:
+            stock = yf.Ticker(ticker, session=session)
+            
+            # A. Try fast_info first (Best for Price & Prev Close)
+            try:
+                current_price = stock.fast_info.last_price
+                prev_close = stock.fast_info.previous_close
+            except:
+                pass
+            
+            # Fallback if fast_info fails
+            if current_price == 0 or current_price is None:
+                hist = stock.history(period='2d') # Get 2 days to find prev close
+                if not hist.empty:
+                    current_price = hist['Close'].iloc[-1]
+                    if len(hist) > 1:
+                        prev_close = hist['Close'].iloc[-2]
+                    else:
+                        prev_close = current_price # Avoid division by zero
+            
+            # B. Try to get Sector (This is a separate call)
+            try:
+                # We try to get info, but if it fails/times out, we skip
+                info = stock.info
+                sector = info.get('sector', 'Unknown')
+                # Sometimes sector is missing, try category or industry
+                if sector == 'Unknown':
+                    sector = info.get('category', 'Unknown')
+            except:
+                pass # Sector is not critical, don't crash
+
+            # Save data
+            price_data[ticker] = {
+                'price': float(current_price) if current_price else 0.0,
+                'prev_close': float(prev_close) if prev_close else 0.0,
+                'sector': sector
+            }
+            
+        except Exception as e:
+            print(f"Error fetching {ticker}: {e}")
             price_data[ticker] = {'price': 0.0, 'prev_close': 0.0, 'sector': 'Unknown'}
     
     return price_data
@@ -138,11 +153,13 @@ def fetch_live_prices(tickers):
 # --- Helper for SPY ---
 def calculate_spy_return(start_date):
     try:
-        # Use download here too for consistency
-        data = yf.download('SPY', start=start_date, progress=False)['Close']
-        if data.empty: return 0.0
-        start_p = float(data.iloc[0])
-        end_p = float(data.iloc[-1])
+        session = requests.Session()
+        session.headers.update({'User-Agent': 'Mozilla/5.0'})
+        spy = yf.Ticker('SPY', session=session)
+        hist = spy.history(start=start_date)
+        if hist.empty: return 0.0
+        start_p = hist['Close'].iloc[0]
+        end_p = hist['Close'].iloc[-1]
         return ((end_p - start_p) / start_p) * 100
     except:
         return 0.0
@@ -158,11 +175,19 @@ def build_portfolio_table(holdings_df, price_data, cash_balance):
         qty = row['Qty']
         avg = row['Avg_Buy_Price']
         
-        data = price_data.get(ticker, {'price': 0, 'sector': 'Unknown'})
+        data = price_data.get(ticker, {'price': 0, 'prev_close': 0, 'sector': 'Unknown'})
         curr = data['price']
+        prev = data['prev_close']
         
         market_value = qty * curr
+        
+        # Total Return: (Current - Avg Buy) / Avg Buy
         total_return_pct = ((curr - avg) / avg * 100) if avg > 0 else 0
+        
+        # Daily Return: (Current - Prev Close) / Prev Close
+        daily_return_pct = 0.0
+        if prev > 0:
+            daily_return_pct = ((curr - prev) / prev * 100)
         
         spy_ret = 0.0
         if row['First_Buy_Date'] is not None:
@@ -177,7 +202,7 @@ def build_portfolio_table(holdings_df, price_data, cash_balance):
             'Current Price': curr,
             'Market Value': market_value,
             'Total Return %': total_return_pct,
-            'Daily Return %': 0.0,
+            'Daily Return %': daily_return_pct, # Now using real data
             'Alpha vs SPY': alpha,
             'Sector': data.get('sector', 'Unknown')
         })
@@ -198,8 +223,11 @@ def build_portfolio_table(holdings_df, price_data, cash_balance):
 def calculate_portfolio_metrics(portfolio_df, cash_balance, transactions_df):
     if portfolio_df.empty:
         mkt_val = 0.0
+        daily_pnl = 0.0
     else:
         mkt_val = portfolio_df['Market Value'].sum()
+        # Calculate Real Daily P&L ($) based on daily return %
+        daily_pnl = (portfolio_df['Market Value'] * (portfolio_df['Daily Return %'] / 100)).sum()
     
     invested = 0.0
     if not transactions_df.empty:
@@ -222,7 +250,7 @@ def calculate_portfolio_metrics(portfolio_df, cash_balance, transactions_df):
         'cash_balance': cash_balance,
         'total_return_dollars': ret_dol,
         'total_return_pct': ret_pct,
-        'daily_pnl': 0.0
+        'daily_pnl': daily_pnl
     }
 
 # --- 6. Historical (Placeholder) ---
