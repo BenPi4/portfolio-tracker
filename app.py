@@ -249,31 +249,48 @@ def create_performance_chart(historical_df, timeframe):
 
 
 def create_allocation_charts(portfolio_df, cash_balance):
-    """Create holdings and sector allocation pie charts."""
+    """Create holdings and sector allocation pie charts with better layout."""
     if portfolio_df.empty:
         return None, None
     
-    # Holdings allocation
+    # --- 1. Holdings Chart ---
     holdings_data = portfolio_df[['Ticker', 'Market Value']].copy()
     
-    # Add cash
-    holdings_with_cash = pd.concat([
-        holdings_data,
-        pd.DataFrame([{'Ticker': 'Cash', 'Market Value': cash_balance}])
-    ])
+    # Add cash row
+    if cash_balance > 0:
+        cash_row = pd.DataFrame([{'Ticker': 'CASH', 'Market Value': cash_balance}])
+        holdings_with_cash = pd.concat([holdings_data, cash_row])
+    else:
+        holdings_with_cash = holdings_data
     
+    # Create Chart
     fig_holdings = px.pie(
         holdings_with_cash,
         values='Market Value',
         names='Ticker',
         title='Holdings Allocation',
-        hole=0.4,
+        hole=0.4, # Donut style
         color_discrete_sequence=px.colors.qualitative.Set3
     )
-    fig_holdings.update_traces(textposition='inside', textinfo='percent+label')
-    fig_holdings.update_layout(height=350)
     
-    # Sector allocation
+    # Clean Layout
+    fig_holdings.update_traces(
+        textposition='inside', # Force text inside slices
+        textinfo='percent+label'
+    )
+    fig_holdings.update_layout(
+        margin=dict(l=20, r=20, t=40, b=20), # Add margins
+        height=400,
+        legend=dict(
+            orientation="h",       # Horizontal legend
+            yanchor="bottom",
+            y=-0.2,                # Move below chart
+            xanchor="center",
+            x=0.5
+        )
+    )
+    
+    # --- 2. Sector Chart ---
     sector_data = get_sector_allocation(portfolio_df)
     
     if not sector_data.empty:
@@ -285,8 +302,21 @@ def create_allocation_charts(portfolio_df, cash_balance):
             hole=0.4,
             color_discrete_sequence=px.colors.qualitative.Pastel
         )
-        fig_sector.update_traces(textposition='inside', textinfo='percent+label')
-        fig_sector.update_layout(height=350)
+        fig_sector.update_traces(
+            textposition='inside',
+            textinfo='percent+label'
+        )
+        fig_sector.update_layout(
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=400,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=-0.2,
+                xanchor="center",
+                x=0.5
+            )
+        )
     else:
         fig_sector = None
     
