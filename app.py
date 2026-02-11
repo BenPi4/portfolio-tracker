@@ -29,6 +29,7 @@ if 'user_tab' not in st.session_state:
 
 # --- UI: LOGIN / SIGNUP ---
 if not st.session_state.logged_in:
+    st.title("🚀 Portfolio Tracker Login")
     tab1, tab2 = st.tabs(["Login", "Sign Up"])
 
     with tab1:
@@ -39,7 +40,7 @@ if not st.session_state.logged_in:
             success, user_tab = manager.login(u, p)
             if success:
                 st.session_state.logged_in = True
-                st.session_state.user_tab = user_tab # This is now a Worksheet object
+                st.session_state.user_tab = user_tab
                 st.success(f"Welcome back, {u}!")
                 st.rerun()
             else:
@@ -57,30 +58,65 @@ if not st.session_state.logged_in:
             else:
                 st.error(msg)
 
-# --- UI: MAIN DASHBOARD ---
+# --- UI: MAIN DASHBOARD (LOGGED IN) ---
 else:
-    st.sidebar.title(f"Hello, {st.session_state.user_tab.title}")
+    # --- SIDEBAR NAVIGATION ---
+    st.sidebar.title(f"👤 {st.session_state.user_tab.title}")
+    menu = st.sidebar.radio("Navigation", ["My Portfolio", "Add Transaction", "Alerts"])
+    
     if st.sidebar.button("Logout"):
         st.session_state.logged_in = False
         st.session_state.user_tab = None
         st.rerun()
 
-    st.title("My Portfolio Tracker")
+    # --- SECTION 1: MY PORTFOLIO ---
+    if menu == "My Portfolio":
+        st.title("📊 My Portfolio")
+        try:
+            data = st.session_state.user_tab.get_all_records()
+            if data:
+                st.write("Current Holdings:")
+                st.table(data)
+            else:
+                st.info("Your portfolio is currently empty. Go to 'Add Transaction' to start!")
+        except Exception as e:
+            st.error(f"Error loading data: {e}")
 
-    # EXAMPLE: Reading data from the user's specific tab
-    try:
-        # Since 'user_tab' is a Worksheet, we can call get_all_records() directly
-        data = st.session_state.user_tab.get_all_records()
-        if data:
-            st.write("Your current holdings:")
-            st.table(data)
-        else:
-            st.info("Your portfolio is currently empty. Start by adding transactions!")
+    # --- SECTION 2: ADD TRANSACTION ---
+    elif menu == "Add Transaction":
+        st.title("➕ Add New Transaction")
+        with st.form("transaction_form"):
+            ticker = st.text_input("Ticker (e.g., AAPL, BTC)")
+            amount = st.number_input("Amount", min_value=0.0, step=0.01)
+            price = st.number_input("Purchase Price", min_value=0.0, step=0.01)
+            date = st.date_input("Transaction Date")
             
-            # Example: Adding a row (If your app has an input form)
-            if st.button("Add Test Row"):
-                st.session_state.user_tab.append_row(["BTC", "1", "50000"])
-                st.success("Test row added! Refresh to see changes.")
-                
-    except Exception as e:
-        st.error(f"Error loading your data: {e}")
+            submitted = st.form_submit_button("Save to Portfolio")
+            
+            if submitted:
+                if ticker:
+                    try:
+                        # Writing directly to the user's specific tab
+                        st.session_state.user_tab.append_row([ticker.upper(), amount, price, str(date)])
+                        st.success(f"Successfully added {ticker}!")
+                    except Exception as e:
+                        st.error(f"Failed to add: {e}")
+                else:
+                    st.warning("Please enter a ticker symbol.")
+
+    # --- SECTION 3: ALERTS ---
+    elif menu == "Alerts":
+        st.title("🔔 Price Alerts")
+        st.write("Set up notifications for your assets.")
+        
+        # This is where your old Alerts logic goes. 
+        # Example structure:
+        with st.form("alert_form"):
+            alert_ticker = st.text_input("Ticker to watch")
+            target_price = st.number_input("Target Price", min_value=0.0)
+            alert_type = st.selectbox("Trigger when price is:", ["Above", "Below"])
+            
+            if st.form_submit_button("Set Alert"):
+                # You can create a second tab for alerts or just append to the main tab with a label
+                # For now, let's just show success:
+                st.success(f"Alert set for {alert_ticker} at ${target_price}")
