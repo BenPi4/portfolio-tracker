@@ -1,20 +1,15 @@
-"""
-Pro Portfolio Tracker - Secure Multi-User Edition (ID Based)
-Uses Sheet IDs for maximum privacy and separation.
-"""
-
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-import json
-import os
 import time
+import os
 
-# Import calculation logic
+# --- IMPORT THE NEW MANAGER ---
+from manager import PortfolioManager 
+
+# Import calculation logic (Assuming this file exists in your folder)
 from portfolio_logic import (
     calculate_cash_balance,
     get_current_holdings,
@@ -52,86 +47,77 @@ st.markdown("""
 # --- Authentication & Setup ---
 
 @st.cache_resource
-def get_google_sheets_client():
-    """Initialize Google Sheets client."""
-    try:
-        if hasattr(st, 'secrets') and 'gcp_service_account' in st.secrets:
-            credentials_dict = dict(st.secrets['gcp_service_account'])
-        else:
-            credentials_json = os.getenv('GOOGLE_CREDENTIALS')
-            if credentials_json:
-                credentials_dict = json.loads(credentials_json)
-            else:
-                st.error("Google Sheets credentials not found!")
-                return None
-        
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        credentials = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
-        client = gspread.authorize(credentials)
-        return client
-    except Exception as e:
-        st.error(f"Error connecting to Google Sheets: {e}")
+def get_manager():
+    """Initialize the PortfolioManager only once."""
+    # Ensure credentials.json exists
+    if not os.path.exists('credentials.json'):
+        st.error("Missing 'credentials.json' file!")
         return None
-
-def check_login(client, main_sheet_name, username, password):
-    """Verify credentials and return the unique SHEET ID."""
-    try:
-        # We open the main ADMIN sheet by name (only the admin needs to know this name)
-        # Note: If you renamed your main sheet, update the name in .env or secrets
-        sh = client.open(main_sheet_name)
-        worksheet = sh.worksheet('Users')
-        users_data = worksheet.get_all_records()
-        
-        for user in users_data:
-            if str(user['Username']).lower() == username.lower() and str(user['Password']) == password:
-                # Return the ID, not the name
-                return user['Sheet_ID']
-        
-        return None
-    except Exception as e:
-        st.error(f"Login System Error: Could not access user database. ({e})")
-        return None
+    return PortfolioManager('credentials.json')
 
 def login_page():
-    """Display the login screen."""
-    st.markdown("<h1 style='text-align: center;'>🔐 Secure Portfolio Login</h1>", unsafe_allow_html=True)
+    """Display the login AND sign-up screen."""
+    st.markdown("<h1 style='text-align: center;'>🔐 Portfolio Portal</h1>", unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        with st.form("login_form"):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Login", use_container_width=True)
-            
-            if submitted:
-                client = get_google_sheets_client()
-                main_sheet = os.getenv('GOOGLE_SHEET_NAME', 'Portfolio Tracker')
+        # Create Tabs for Login and Sign Up
+        tab1, tab2 = st.tabs(["Login", "Sign Up (New User)"])
+        
+        manager = get_manager()
+        
+        # --- TAB 1: LOGIN ---
+        with tab1:
+            with st.form("login_form"):
+                username = st.text_input("Username")
+                password = st.text_input("Password", type="password")
+                submitted = st.form_submit_button("Login", use_container_width=True)
                 
-                if client:
+                if submitted:
                     with st.spinner("Verifying credentials..."):
-                        # This returns the ID now
-                        target_sheet_id = check_login(client, main_sheet, username, password)
+                        success, sheet_obj = manager.login(username, password)
                         
-                        if target_sheet_id:
+                        if success:
                             st.session_state['logged_in'] = True
                             st.session_state['username'] = username
-                            st.session_state['sheet_id'] = target_sheet_id # Store ID
+                            st.session_state['sheet_id'] = sheet_obj.id # Save the ID!
                             st.success(f"Welcome back, {username}!")
                             time.sleep(1)
                             st.rerun()
                         else:
-                            st.error("Incorrect username or password")
+                            st.error("Incorrect username or password.")
 
-# --- Data Loading Functions (Updated to use ID) ---
+        # --- TAB 2: SIGN UP ---
+        with tab2:
+            st.warning("New here? Create your own private portfolio sheet.")
+            with st.form("signup_form"):
+                new_user = st.text_input("Choose Username")
+                new_pass = st.text_input("Choose Password", type="password")
+                email = st.text_input("Email (Optional - to share sheet)", placeholder="user@gmail.com")
+                signup_submitted = st.form_submit_button("Create Account", use_container_width=True)
+                
+                if signup_submitted:
+                    if len(new_user) < 3 or len(new_pass) < 4:
+                        st.error("Username/Password too short.")
+                    else:
+                        with st.spinner("Creating your environment (this takes about 5 seconds)..."):
+                            success, msg = manager.sign_up(new_user, new_pass, email)
+                            if success:
+                                st.success(msg)
+                                st.info("You can now go to the 'Login' tab and sign in!")
+                            else:
+                                st.error(msg)
+
+# --- Data Loading Functions ---
 
 @st.cache_data(ttl=60)
-def load_transactions(_client, sheet_id):
-    """Load transactions using Sheet ID (Secure)."""
+def load_transactions(_manager, sheet_id):
+    """Load transactions using the Manager's client and specific Sheet ID."""
     try:
-        # open_by_key is the safest way to open a specific sheet
-        spreadsheet = _client.open_by_key(sheet_id)
+        # We use the manager's internal client to open the sheet by ID
+        spreadsheet = _manager.client.open_by_key(sheet_id)
         worksheet = spreadsheet.worksheet('Transactions')
         data = worksheet.get_all_records()
         df = pd.DataFrame(data)
@@ -141,25 +127,12 @@ def load_transactions(_client, sheet_id):
             df['Price'] = pd.to_numeric(df['Price'], errors='coerce')
         return df
     except Exception as e:
-        st.error(f"Access Denied or Sheet Not Found. Please ensure you shared the sheet with the Service Account email. (Error: {e})")
+        st.error(f"Error loading transactions: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=60)
-def load_alerts(_client, sheet_id):
+def add_transaction(_manager, sheet_id, transaction_data):
     try:
-        spreadsheet = _client.open_by_key(sheet_id)
-        worksheet = spreadsheet.worksheet('Alerts')
-        data = worksheet.get_all_records()
-        df = pd.DataFrame(data)
-        if not df.empty:
-            df['Target_Price'] = pd.to_numeric(df['Target_Price'], errors='coerce')
-        return df
-    except Exception as e:
-        return pd.DataFrame()
-
-def add_transaction(client, sheet_id, transaction_data):
-    try:
-        spreadsheet = client.open_by_key(sheet_id)
+        spreadsheet = _manager.client.open_by_key(sheet_id)
         worksheet = spreadsheet.worksheet('Transactions')
         worksheet.append_row([
             transaction_data['Date'].strftime('%Y-%m-%d'),
@@ -174,23 +147,7 @@ def add_transaction(client, sheet_id, transaction_data):
         st.error(f"Error: {e}")
         return False
 
-def add_alert(client, sheet_id, alert_data):
-    try:
-        spreadsheet = client.open_by_key(sheet_id)
-        worksheet = spreadsheet.worksheet('Alerts')
-        worksheet.append_row([
-            alert_data['Ticker'],
-            alert_data['Target_Price'],
-            alert_data['Condition'],
-            'False'
-        ])
-        st.cache_data.clear()
-        return True
-    except Exception as e:
-        st.error(f"Error: {e}")
-        return False
-
-# --- Chart Functions (Reused) ---
+# --- Chart Functions (Unchanged) ---
 def create_performance_chart(historical_df, timeframe):
     if historical_df.empty: return None
     today = datetime.now()
@@ -243,7 +200,8 @@ def main_app():
             st.rerun()
         st.divider()
 
-    client = get_google_sheets_client()
+    # Get the manager and the current user's sheet ID
+    manager = get_manager()
     sheet_id = st.session_state['sheet_id']
     
     # Title
@@ -265,14 +223,14 @@ def main_app():
             
         if st.button("Submit Transaction"):
             data = {'Date': t_date, 'Ticker': ticker, 'Type': t_type, 'Quantity': qty, 'Price': price}
-            if add_transaction(client, sheet_id, data):
+            if add_transaction(manager, sheet_id, data):
                 st.success("Added!")
                 time.sleep(0.5)
                 st.rerun()
 
     # Load Data
     with st.spinner("Loading your personal data..."):
-        transactions_df = load_transactions(client, sheet_id)
+        transactions_df = load_transactions(manager, sheet_id)
     
     if transactions_df.empty:
         st.info("👋 Welcome! Your portfolio sheet is empty. Add a transaction to start.")
