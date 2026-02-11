@@ -33,10 +33,10 @@ class PortfolioManager:
         
         # --- CONFIGURATION: PASTE YOUR SHEET IDs HERE ---
         # 1. The ID of the empty Users_DB sheet
-        self.USERS_DB_ID = '1fsmzv2pcxJmVZ8DT5KMC1TM936rmoBLOdJ5umvizaFo' 
+        self.USERS_DB_ID = '1NwDxpF_NaeZxWLS2VvSnJYmwj_ztN2ym4l3V0ZiYce4' 
         
         # 2. The ID of the clean Portfolio_Template sheet
-        self.TEMPLATE_ID = '1fsmzv2pcxJmVZ8DT5KMC1TM936rmoBLOdJ5umvizaFo'
+        self.TEMPLATE_ID = '1uvtDM1h6knCAZssERAxMp7bqK2-lqoe_1gna9O9iJBU'
 
     def sign_up(self, username, password, user_email=None):
         """
