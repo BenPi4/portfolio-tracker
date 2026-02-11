@@ -151,51 +151,64 @@ def create_performance_chart(historical_df, timeframe):
 def create_allocation_charts(portfolio_df, cash_balance):
     if portfolio_df.empty: return None, None
     
-    # --- 1. Holdings Pie Chart ---
+    # --- 1. Holdings Chart (Left Side) ---
+    # הכנת הנתונים: מניות + מזומן
     holdings = portfolio_df[['Ticker', 'Market Value']].copy()
     holdings_with_cash = pd.concat([holdings, pd.DataFrame([{'Ticker': 'Cash', 'Market Value': cash_balance}])])
     
-    fig1 = px.pie(holdings_with_cash, values='Market Value', names='Ticker', title='Holdings Allocation', hole=0.4)
-    fig1.update_traces(textinfo='percent+label', textposition='inside')
-    
-    # FIX: Update layout to prevent overflowing and maintain circle shape
-    fig1.update_layout(
-        # Move legend to the bottom center
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=-0.3,
-            xanchor="center",
-            x=0.5
-        ),
-        # Tighten margins (top, bottom, left, right) to fit container
-        margin=dict(t=50, b=50, l=20, r=20),
-        # Set a fixed height so it doesn't get squashed into an oval
-        height=400
+    # יצירת הגרף בסגנון "דונאט"
+    fig1 = px.pie(
+        holdings_with_cash, 
+        values='Market Value', 
+        names='Ticker', 
+        title='Holdings Allocation', 
+        hole=0.5, # חור באמצע (דונאט) למראה נקי יותר
+        color_discrete_sequence=px.colors.qualitative.Pastel # צבעים נעימים יותר
     )
     
-    # --- 2. Sector Pie Chart ---
+    # עיצוב הטקסט בתוך הגרף: רק אחוזים, כדי לחסוך מקום
+    fig1.update_traces(textposition='inside', textinfo='percent')
+    
+    # עיצוב כללי: שוליים צמודים ומקרא למטה
+    fig1.update_layout(
+        showlegend=True,
+        legend=dict(
+            orientation="h",       # מקרא אופקי
+            yanchor="bottom", y=-0.2, # ממוקם מתחת לגרף
+            xanchor="center", x=0.5
+        ),
+        margin=dict(l=20, r=20, t=40, b=20), # שוליים מינימליים
+        height=350 # גובה קבוע שמונע מתיחה
+    )
+    
+    # --- 2. Sector Chart (Right Side) ---
     sector_data = get_sector_allocation(portfolio_df)
     fig2 = None
     if not sector_data.empty:
-        fig2 = px.pie(sector_data, values='Value', names='Sector', title='Sector Allocation', hole=0.4)
-        fig2.update_traces(textinfo='percent+label', textposition='inside')
+        fig2 = px.pie(
+            sector_data, 
+            values='Value', 
+            names='Sector', 
+            title='Sector Allocation', 
+            hole=0.5,
+            color_discrete_sequence=px.colors.qualitative.Set3
+        )
+        fig2.update_traces(textposition='inside', textinfo='percent')
         
-        # Apply the exact same layout fix to the second chart for consistency
+        # אותו עיצוב בדיוק כדי שיהיה סימטרי
         fig2.update_layout(
+            showlegend=True,
             legend=dict(
                 orientation="h",
-                yanchor="bottom",
-                y=-0.3,
-                xanchor="center",
-                x=0.5
+                yanchor="bottom", y=-0.2,
+                xanchor="center", x=0.5
             ),
-            margin=dict(t=50, b=50, l=20, r=20),
-            height=400
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=350
         )
         
     return fig1, fig2
-
+    
 # ==========================================
 #               MAIN APP LOGIC
 # ==========================================
