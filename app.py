@@ -151,32 +151,47 @@ def create_performance_chart(historical_df, timeframe):
 def create_allocation_charts(portfolio_df, cash_balance):
     if portfolio_df.empty: return None, None
     
-    # Holdings Pie
+    # --- 1. Holdings Pie Chart ---
     holdings = portfolio_df[['Ticker', 'Market Value']].copy()
     holdings_with_cash = pd.concat([holdings, pd.DataFrame([{'Ticker': 'Cash', 'Market Value': cash_balance}])])
-    fig1 = px.pie(holdings_with_cash, values='Market Value', names='Ticker', title='Holdings', hole=0.4)
-    fig1.update_traces(textinfo='percent+label')
     
-    # --- FIX: Layout adjustment for Left Pie Chart ---
+    fig1 = px.pie(holdings_with_cash, values='Market Value', names='Ticker', title='Holdings Allocation', hole=0.4)
+    fig1.update_traces(textinfo='percent+label', textposition='inside')
+    
+    # FIX: Update layout to prevent overflowing and maintain circle shape
     fig1.update_layout(
-        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
-        margin=dict(t=30, b=50, l=0, r=0),
-        height=350
+        # Move legend to the bottom center
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.3,
+            xanchor="center",
+            x=0.5
+        ),
+        # Tighten margins (top, bottom, left, right) to fit container
+        margin=dict(t=50, b=50, l=20, r=20),
+        # Set a fixed height so it doesn't get squashed into an oval
+        height=400
     )
-    # -------------------------------------------------
-
-    # Sector Pie
+    
+    # --- 2. Sector Pie Chart ---
     sector_data = get_sector_allocation(portfolio_df)
     fig2 = None
     if not sector_data.empty:
-        fig2 = px.pie(sector_data, values='Value', names='Sector', title='Sectors', hole=0.4)
-        fig2.update_traces(textinfo='percent+label')
+        fig2 = px.pie(sector_data, values='Value', names='Sector', title='Sector Allocation', hole=0.4)
+        fig2.update_traces(textinfo='percent+label', textposition='inside')
         
-        # Consistent layout for the second pie too
+        # Apply the exact same layout fix to the second chart for consistency
         fig2.update_layout(
-            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
-            margin=dict(t=30, b=50, l=0, r=0),
-            height=350
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=-0.3,
+                xanchor="center",
+                x=0.5
+            ),
+            margin=dict(t=50, b=50, l=20, r=20),
+            height=400
         )
         
     return fig1, fig2
