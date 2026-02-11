@@ -5,7 +5,6 @@ class PortfolioManager:
     def __init__(self, creds_input):
         """
         Initialize the Portfolio Manager.
-        Handles authentication via local JSON or Streamlit Secrets.
         """
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         
@@ -22,12 +21,14 @@ class PortfolioManager:
         self.USERS_DB_ID = '1NwDxpF_NaeZxWLS2VvSnJYmwj_ztN2ym4l3V0ZiYce4' 
         self.TEMPLATE_ID = '1uvtDM1h6knCAZssERAxMp7bqK2-lqoe_1gna9O9iJBU'
 
-   def sign_up(self, username, password, user_email=""):
+    def sign_up(self, username, password, user_email=""):
+        """
+        Registers a new user and duplicates the template.
+        """
         try:
             db_spreadsheet = self.client.open_by_key(self.USERS_DB_ID)
             
-            # --- FIX: Access sheet by GID instead of Name ---
-            # Your URL ends with gid=1266209882
+            # Access sheet by specific GID (1266209882)
             db_sheet = None
             for worksheet in db_spreadsheet.worksheets():
                 if str(worksheet.id) == '1266209882':
@@ -35,7 +36,6 @@ class PortfolioManager:
                     break
             
             if db_sheet is None:
-                # Fallback to the very first sheet if GID is not found
                 db_sheet = db_spreadsheet.get_worksheet(0)
 
             # 1. Check if username already exists
@@ -50,13 +50,12 @@ class PortfolioManager:
             if user_email and "@" in user_email:
                 new_sheet.share(user_email, perm_type='user', role='writer')
             
-            # 4. Append row to DB
+            # 4. Append row to DB: [Username, Password, Sheet_ID, Email]
             db_sheet.append_row([username, password, new_sheet.id, user_email])
             return True, "Success! User created."
             
         except Exception as e:
             return False, f"Error during signup: {str(e)}"
-
 
     def login(self, username, password):
         """
@@ -64,11 +63,20 @@ class PortfolioManager:
         """
         try:
             db_spreadsheet = self.client.open_by_key(self.USERS_DB_ID)
-            db_sheet = db_spreadsheet.worksheet('sheet1')
+            
+            # Access sheet by specific GID (1266209882)
+            db_sheet = None
+            for worksheet in db_spreadsheet.worksheets():
+                if str(worksheet.id) == '1266209882':
+                    db_sheet = worksheet
+                    break
+            
+            if db_sheet is None:
+                db_sheet = db_spreadsheet.get_worksheet(0)
+
             all_records = db_sheet.get_all_records() 
             
             for record in all_records:
-                # Matches keys in 'sheet1' header row (Username, Password)
                 if str(record.get('Username')) == str(username) and str(record.get('Password')) == str(password):
                     personal_sheet = self.client.open_by_key(record.get('Sheet_ID'))
                     return True, personal_sheet
