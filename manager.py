@@ -105,11 +105,16 @@ class PortfolioManager:
                             # If user is old and doesn't have an alerts tab yet
                             alerts_tab = None 
                             
+                        # RETURN 3 VALUES (Success)
                         return True, trans_tab, alerts_tab
                     except:
+                        # RETURN 3 VALUES (Error finding tab)
                         return False, None, None
             
+            # RETURN 3 VALUES (User not found)
             return False, None, None
+            
         except Exception as e:
             print(f"Login error: {e}")
+            # RETURN 3 VALUES (General Error)
             return False, None, None
