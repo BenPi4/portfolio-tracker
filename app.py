@@ -7,7 +7,6 @@ import os
 from manager import PortfolioManager
 
 # --- IMPORT LOGIC FROM HELPER FILE ---
-# Make sure portfolio_logic.py is in the same folder
 from portfolio_logic import (
     calculate_cash_balance,
     get_current_holdings,
@@ -75,7 +74,6 @@ def load_data():
             return df
         return pd.DataFrame()
     except Exception as e:
-        # If sheet is empty or headers are missing
         return pd.DataFrame()
 
 def load_alerts():
@@ -92,10 +90,10 @@ def add_alert_to_sheet(ticker, target, condition):
     try:
         if st.session_state.alerts_tab:
             st.session_state.alerts_tab.append_row([ticker, target, condition, "Yes"])
-            st.cache_data.clear() # Refresh cache to show new data immediately
+            st.cache_data.clear() # Refresh cache
             return True
         else:
-            st.error("Alerts tab not found. Please contact support.")
+            st.error("Alerts tab not found.")
             return False
     except Exception as e:
         st.error(f"Error adding alert: {e}")
@@ -152,7 +150,7 @@ else:
     st.sidebar.markdown("---")
     st.sidebar.header("📝 Actions")
 
-    # 1. ADD TRANSACTION WIDGET
+    # ADD TRANSACTION
     with st.sidebar.expander("➕ Add Transaction", expanded=True):
         type_ = st.selectbox("Type", ['Buy', 'Sell', 'Deposit', 'Withdraw'])
         date_ = st.date_input("Date")
@@ -174,7 +172,7 @@ else:
                 st.success("Transaction added!")
                 st.rerun()
 
-    # 2. SET ALERT WIDGET
+    # SET ALERT
     with st.sidebar.expander("🔔 Set Price Alert"):
         alert_ticker = st.text_input("Ticker").upper()
         alert_price = st.number_input("Target Price ($)", min_value=0.0)
@@ -196,7 +194,7 @@ else:
         st.info("👋 Your portfolio is currently empty. Use the sidebar to add your first transaction!")
         st.stop()
 
-    # Calculate Portfolio Logic
+    # Calculate Logic
     cash = calculate_cash_balance(df)
     holdings = get_current_holdings(df)
     
@@ -207,22 +205,19 @@ else:
     port_df = build_portfolio_table(holdings, prices, cash)
     metrics = calculate_portfolio_metrics(port_df, cash, df)
 
-    # --- METRICS SECTION ---
+    # Metrics Section
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Value", f"${metrics['total_portfolio_value']:,.2f}")
     c2.metric("Cash Balance", f"${metrics['cash_balance']:,.2f}")
     
-    # Color logic for return
     delta_color = "normal" if metrics['total_return_dollars'] >= 0 else "inverse"
     c3.metric("Total Return", f"${metrics['total_return_dollars']:,.2f}", f"{metrics['total_return_pct']:.2f}%", delta_color=delta_color)
     c4.metric("Daily P&L", f"${metrics['daily_pnl']:,.2f}", delta_color=delta_color)
 
     st.divider()
 
-    # --- HOLDINGS TABLE ---
+    # Holdings Table (Clean Format)
     st.markdown("### 💼 Current Holdings")
-    
-    # Format the dataframe for cleaner display (2 decimal places)
     display_df = port_df.copy()
     
     st.dataframe(
@@ -236,50 +231,66 @@ else:
             "Alpha vs SPY": "{:.2f}%"
         }),
         use_container_width=True,
-        hide_index=True  # Hides the index column (0,1,2...)
+        hide_index=True 
     )
 
-    # --- CHARTS SECTION ---
+    # --- CHARTS SECTION (RESTORED LAYOUT) ---
     st.markdown("### 📊 Analytics")
-    col_charts_1, col_charts_2 = st.columns(2)
+
+    # 1. Historical Performance Chart (Full Width)
+    st.markdown("**Historical Performance**")
+    start_date = datetime.now() - timedelta(days=365)
+    hist_df = calculate_historical_portfolio_value(df, start_date)
     
-    with col_charts_1:
-        st.markdown("**Allocation**")
+    if not hist_df.empty:
+        fig_hist = px.line(hist_df, x='Date', y='Portfolio_Return_%')
+        fig_hist.update_layout(
+            margin=dict(t=10, b=10, l=0, r=0), 
+            height=300,
+            xaxis_title=None,
+            yaxis_title="Return (%)"
+        )
+        st.plotly_chart(fig_hist, use_container_width=True)
+    else:
+        st.info("Not enough data for historical chart.")
+
+    # 2. Two Pie Charts Side-by-Side (Holdings + Sectors)
+    col_pie1, col_pie2 = st.columns(2)
+    
+    # Left: Holdings Allocation (Fixed Layout)
+    with col_pie1:
+        st.markdown("**Holdings Allocation**")
         holdings_data = port_df[['Ticker', 'Market Value']].copy()
         fig_pie = px.pie(holdings_data, values='Market Value', names='Ticker', hole=0.4)
         
-        # FIX: Legend at bottom, tight margins to prevent cutting off
+        # Legend at bottom to prevent overlap
         fig_pie.update_layout(
             legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
-            margin=dict(t=30, b=50, l=0, r=0),
+            margin=dict(t=20, b=50, l=20, r=20),
             height=350
         )
         st.plotly_chart(fig_pie, use_container_width=True)
 
-    with col_charts_2:
-        st.markdown("**Historical Performance**")
-        # Calculate history (last 365 days)
-        start_date = datetime.now() - timedelta(days=365)
-        hist_df = calculate_historical_portfolio_value(df, start_date)
+    # Right: Sector Allocation (Restored)
+    with col_pie2:
+        st.markdown("**Sector Allocation**")
+        sector_data = get_sector_allocation(port_df)
         
-        if not hist_df.empty:
-            fig_hist = px.line(hist_df, x='Date', y='Portfolio_Return_%')
-            fig_hist.update_layout(
-                margin=dict(t=30, b=30, l=0, r=0), 
-                height=350,
-                xaxis_title=None,
-                yaxis_title="Return (%)"
+        if not sector_data.empty:
+            fig_sector = px.pie(sector_data, values='Value', names='Sector', hole=0.4)
+            # Same fix for legend
+            fig_sector.update_layout(
+                legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+                margin=dict(t=20, b=50, l=20, r=20),
+                height=350
             )
-            # Add line color
-            fig_hist.update_traces(line_color='#1f77b4', line_width=2)
-            st.plotly_chart(fig_hist, use_container_width=True)
+            st.plotly_chart(fig_sector, use_container_width=True)
         else:
-            st.info("Not enough data for chart.")
+            st.info("Sector data unavailable.")
 
     # --- ACTIVE ALERTS SECTION ---
     st.markdown("### 🔔 Active Alerts")
     alerts_df = load_alerts()
-    
     if not alerts_df.empty:
         st.dataframe(alerts_df, use_container_width=True, hide_index=True)
     else:
