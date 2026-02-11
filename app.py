@@ -49,29 +49,21 @@ st.markdown("""
 @st.cache_resource
 def get_manager():
     """
-    Initialize PortfolioManager using either st.secrets (Cloud) or local file.
+    Hybrid initialization: Prioritizes Streamlit Secrets (Cloud) over local files.
     """
-    # 1. Check if running in Cloud (Secrets exist)
-    if 'gcp_service_account' in st.secrets:
-        # Convert the Secrets object to a standard Python dictionary
-        creds_dict = dict(st.secrets['gcp_service_account'])
-        return PortfolioManager(creds_dict)
-
-    # 2. Check if running Locally (File exists)
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    creds_path = os.path.join(current_dir, 'credentials.json')
+    # בדיקה אם יש נתונים ב-Secrets (הדרך הבטוחה לענן)
+    if "gcp_service_account" in st.secrets:
+        # אנחנו הופכים את ה-Secrets למילון רגיל ושולחים ל-Manager
+        creds_info = dict(st.secrets["gcp_service_account"])
+        return PortfolioManager(creds_info)
     
+    # אם אין Secrets, רק אז נחפש קובץ פיזי (למצב פיתוח ב-Codespace)
+    creds_path = 'credentials.json'
     if os.path.exists(creds_path):
         return PortfolioManager(creds_path)
     
-    # Fallback for simple local run
-    elif os.path.exists('credentials.json'):
-         return PortfolioManager('credentials.json')
-         
-    else:
-        st.error("Authentication Error: Could not find 'credentials.json' locally, and no 'st.secrets' configured.")
-        st.stop()
-        return None
+    st.error("Missing Credentials! Please add them to Streamlit Secrets or upload credentials.json.")
+    st.stop()
 
 def login_page():
     """Display the login AND sign-up screen."""
