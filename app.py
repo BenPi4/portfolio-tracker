@@ -48,12 +48,33 @@ st.markdown("""
 
 @st.cache_resource
 def get_manager():
-    """Initialize the PortfolioManager only once."""
-    # Ensure credentials.json exists
-    if not os.path.exists('credentials.json'):
-        st.error("Missing 'credentials.json' file!")
+    """
+    Initialize the PortfolioManager only once.
+    This function intelligently searches for 'credentials.json' in the same directory as the script.
+    """
+    # 1. Get the absolute path of the directory where app.py is located
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # 2. Construct the full path to credentials.json
+    creds_path = os.path.join(current_dir, 'credentials.json')
+    
+    # Debug print to the terminal (so you can see where it's looking)
+    print(f"DEBUG: Looking for credentials at: {creds_path}")
+
+    # 3. Check if file exists at that path
+    if os.path.exists(creds_path):
+        return PortfolioManager(creds_path)
+    
+    # 4. Fallback: Check strictly in the current working directory
+    elif os.path.exists('credentials.json'):
+         print("DEBUG: Found credentials in current working directory.")
+         return PortfolioManager('credentials.json')
+         
+    # 5. Critical Error Handling
+    else:
+        st.error(f"CRITICAL ERROR: 'credentials.json' was not found at: {creds_path}")
+        st.stop() # Stops execution here to prevent further crashes
         return None
-    return PortfolioManager('credentials.json')
 
 def login_page():
     """Display the login AND sign-up screen."""
