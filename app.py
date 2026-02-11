@@ -1,6 +1,6 @@
 """
-Pro Portfolio Tracker - Main Streamlit Application
-A comprehensive portfolio management dashboard with real-time data.
+Pro Portfolio Tracker - Secure Multi-User Edition (ID Based)
+Uses Sheet IDs for maximum privacy and separation.
 """
 
 import streamlit as st
@@ -12,8 +12,9 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
 import os
+import time
 
-# Import our calculation logic
+# Import calculation logic
 from portfolio_logic import (
     calculate_cash_balance,
     get_current_holdings,
@@ -24,7 +25,6 @@ from portfolio_logic import (
     get_sector_allocation
 )
 
-
 # Page configuration
 st.set_page_config(
     page_title="Pro Portfolio Tracker",
@@ -33,51 +33,31 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-
-# Custom CSS for better styling
+# Custom CSS
 st.markdown("""
     <style>
-    .main {
-        padding: 0rem 1rem;
-    }
+    .main { padding: 0rem 1rem; }
     .stMetric {
         background-color: #f0f2f6;
         padding: 15px;
         border-radius: 10px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
-    .stMetric label {
-        font-weight: 600;
-        color: #31333F;
-    }
-    div[data-testid="stMetricValue"] {
-        font-size: 28px;
-        font-weight: 700;
-    }
-    h1 {
-        color: #1f77b4;
-        font-weight: 700;
-    }
-    h2 {
-        color: #2c3e50;
-        margin-top: 2rem;
-    }
+    div[data-testid="stMetricValue"] { font-size: 28px; font-weight: 700; }
+    h1 { color: #1f77b4; font-weight: 700; }
     </style>
 """, unsafe_allow_html=True)
 
 
+# --- Authentication & Setup ---
+
 @st.cache_resource
 def get_google_sheets_client():
-    """
-    Initialize and return Google Sheets client.
-    Uses service account credentials from Streamlit secrets or environment.
-    """
+    """Initialize Google Sheets client."""
     try:
-        # Try to get credentials from Streamlit secrets first
         if hasattr(st, 'secrets') and 'gcp_service_account' in st.secrets:
             credentials_dict = dict(st.secrets['gcp_service_account'])
         else:
-            # Fallback to environment variable
             credentials_json = os.getenv('GOOGLE_CREDENTIALS')
             if credentials_json:
                 credentials_dict = json.loads(credentials_json)
@@ -85,68 +65,102 @@ def get_google_sheets_client():
                 st.error("Google Sheets credentials not found!")
                 return None
         
-        scope = [
-            'https://spreadsheets.google.com/feeds',
-            'https://www.googleapis.com/auth/drive'
-        ]
-        
-        credentials = ServiceAccountCredentials.from_json_keyfile_dict(
-            credentials_dict, scope
-        )
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        credentials = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
         client = gspread.authorize(credentials)
-        
         return client
     except Exception as e:
         st.error(f"Error connecting to Google Sheets: {e}")
         return None
 
-
-@st.cache_data(ttl=300)  # Cache for 5 minutes
-def load_transactions(_client, sheet_name):
-    """Load transactions from Google Sheet."""
+def check_login(client, main_sheet_name, username, password):
+    """Verify credentials and return the unique SHEET ID."""
     try:
-        spreadsheet = _client.open(sheet_name)
+        # We open the main ADMIN sheet by name (only the admin needs to know this name)
+        # Note: If you renamed your main sheet, update the name in .env or secrets
+        sh = client.open(main_sheet_name)
+        worksheet = sh.worksheet('Users')
+        users_data = worksheet.get_all_records()
+        
+        for user in users_data:
+            if str(user['Username']).lower() == username.lower() and str(user['Password']) == password:
+                # Return the ID, not the name
+                return user['Sheet_ID']
+        
+        return None
+    except Exception as e:
+        st.error(f"Login System Error: Could not access user database. ({e})")
+        return None
+
+def login_page():
+    """Display the login screen."""
+    st.markdown("<h1 style='text-align: center;'>🔐 Secure Portfolio Login</h1>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Login", use_container_width=True)
+            
+            if submitted:
+                client = get_google_sheets_client()
+                main_sheet = os.getenv('GOOGLE_SHEET_NAME', 'Portfolio Tracker')
+                
+                if client:
+                    with st.spinner("Verifying credentials..."):
+                        # This returns the ID now
+                        target_sheet_id = check_login(client, main_sheet, username, password)
+                        
+                        if target_sheet_id:
+                            st.session_state['logged_in'] = True
+                            st.session_state['username'] = username
+                            st.session_state['sheet_id'] = target_sheet_id # Store ID
+                            st.success(f"Welcome back, {username}!")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("Incorrect username or password")
+
+# --- Data Loading Functions (Updated to use ID) ---
+
+@st.cache_data(ttl=60)
+def load_transactions(_client, sheet_id):
+    """Load transactions using Sheet ID (Secure)."""
+    try:
+        # open_by_key is the safest way to open a specific sheet
+        spreadsheet = _client.open_by_key(sheet_id)
         worksheet = spreadsheet.worksheet('Transactions')
         data = worksheet.get_all_records()
         df = pd.DataFrame(data)
-        
-        # Ensure proper data types
         if not df.empty:
             df['Date'] = pd.to_datetime(df['Date'])
             df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce')
             df['Price'] = pd.to_numeric(df['Price'], errors='coerce')
-        
         return df
     except Exception as e:
-        st.error(f"Error loading transactions: {e}")
+        st.error(f"Access Denied or Sheet Not Found. Please ensure you shared the sheet with the Service Account email. (Error: {e})")
         return pd.DataFrame()
 
-
-@st.cache_data(ttl=300)
-def load_alerts(_client, sheet_name):
-    """Load alerts from Google Sheet."""
+@st.cache_data(ttl=60)
+def load_alerts(_client, sheet_id):
     try:
-        spreadsheet = _client.open(sheet_name)
+        spreadsheet = _client.open_by_key(sheet_id)
         worksheet = spreadsheet.worksheet('Alerts')
         data = worksheet.get_all_records()
         df = pd.DataFrame(data)
-        
         if not df.empty:
             df['Target_Price'] = pd.to_numeric(df['Target_Price'], errors='coerce')
-        
         return df
     except Exception as e:
-        st.error(f"Error loading alerts: {e}")
         return pd.DataFrame()
 
-
-def add_transaction(client, sheet_name, transaction_data):
-    """Add a new transaction to Google Sheet."""
+def add_transaction(client, sheet_id, transaction_data):
     try:
-        spreadsheet = client.open(sheet_name)
+        spreadsheet = client.open_by_key(sheet_id)
         worksheet = spreadsheet.worksheet('Transactions')
-        
-        # Append row
         worksheet.append_row([
             transaction_data['Date'].strftime('%Y-%m-%d'),
             transaction_data['Ticker'],
@@ -154,416 +168,175 @@ def add_transaction(client, sheet_name, transaction_data):
             transaction_data['Quantity'],
             transaction_data['Price']
         ])
-        
-        # Clear cache to reload data
         st.cache_data.clear()
         return True
     except Exception as e:
-        st.error(f"Error adding transaction: {e}")
+        st.error(f"Error: {e}")
         return False
 
-
-def add_alert(client, sheet_name, alert_data):
-    """Add a new price alert to Google Sheet."""
+def add_alert(client, sheet_id, alert_data):
     try:
-        spreadsheet = client.open(sheet_name)
+        spreadsheet = client.open_by_key(sheet_id)
         worksheet = spreadsheet.worksheet('Alerts')
-        
-        # Append row
         worksheet.append_row([
             alert_data['Ticker'],
             alert_data['Target_Price'],
             alert_data['Condition'],
-            'False'  # Email_Sent
+            'False'
         ])
-        
         st.cache_data.clear()
         return True
     except Exception as e:
-        st.error(f"Error adding alert: {e}")
+        st.error(f"Error: {e}")
         return False
 
-
+# --- Chart Functions (Reused) ---
 def create_performance_chart(historical_df, timeframe):
-    """Create historical performance comparison chart."""
-    if historical_df.empty:
-        return None
-    
-    # Filter by timeframe
+    if historical_df.empty: return None
     today = datetime.now()
-    if timeframe == '1W':
-        start_date = today - timedelta(days=7)
-    elif timeframe == '1M':
-        start_date = today - timedelta(days=30)
-    elif timeframe == 'YTD':
-        start_date = datetime(today.year, 1, 1)
-    elif timeframe == '1Y':
-        start_date = today - timedelta(days=365)
-    else:  # All
-        start_date = historical_df['Date'].min()
+    if timeframe == '1W': start = today - timedelta(days=7)
+    elif timeframe == '1M': start = today - timedelta(days=30)
+    elif timeframe == 'YTD': start = datetime(today.year, 1, 1)
+    elif timeframe == '1Y': start = today - timedelta(days=365)
+    else: start = historical_df['Date'].min()
     
-    filtered_df = historical_df[historical_df['Date'] >= start_date].copy()
-    
-    if filtered_df.empty:
-        return None
+    filtered_df = historical_df[historical_df['Date'] >= start].copy()
+    if filtered_df.empty: return None
     
     fig = go.Figure()
-    
-    # Portfolio line
-    fig.add_trace(go.Scatter(
-        x=filtered_df['Date'],
-        y=filtered_df['Portfolio_Return_%'],
-        mode='lines',
-        name='Your Portfolio',
-        line=dict(color='#1f77b4', width=3),
-        hovertemplate='%{y:.2f}%<extra></extra>'
-    ))
-    
-    # SPY line
-    fig.add_trace(go.Scatter(
-        x=filtered_df['Date'],
-        y=filtered_df['SPY_Return_%'],
-        mode='lines',
-        name='S&P 500 (SPY)',
-        line=dict(color='#ff7f0e', width=2, dash='dash'),
-        hovertemplate='%{y:.2f}%<extra></extra>'
-    ))
-    
-    fig.update_layout(
-        title='Portfolio Performance vs S&P 500',
-        xaxis_title='Date',
-        yaxis_title='Cumulative Return (%)',
-        hovermode='x unified',
-        template='plotly_white',
-        height=400,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        )
-    )
-    
+    fig.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['Portfolio_Return_%'], mode='lines', name='Portfolio', line=dict(color='#1f77b4', width=3)))
+    fig.add_trace(go.Scatter(x=filtered_df['Date'], y=filtered_df['SPY_Return_%'], mode='lines', name='S&P 500', line=dict(color='#ff7f0e', width=2, dash='dash')))
+    fig.update_layout(title='Performance vs S&P 500', xaxis_title='Date', yaxis_title='Return (%)', hovermode='x unified', height=400, legend=dict(orientation="h", y=1.02, x=1))
     return fig
 
-
 def create_allocation_charts(portfolio_df, cash_balance):
-    """Create holdings and sector allocation pie charts with better layout."""
-    if portfolio_df.empty:
-        return None, None
-    
-    # --- 1. Holdings Chart ---
-    holdings_data = portfolio_df[['Ticker', 'Market Value']].copy()
-    
-    # Add cash row
+    if portfolio_df.empty: return None, None
+    holdings = portfolio_df[['Ticker', 'Market Value']].copy()
     if cash_balance > 0:
-        cash_row = pd.DataFrame([{'Ticker': 'CASH', 'Market Value': cash_balance}])
-        holdings_with_cash = pd.concat([holdings_data, cash_row])
-    else:
-        holdings_with_cash = holdings_data
+        holdings = pd.concat([holdings, pd.DataFrame([{'Ticker': 'CASH', 'Market Value': cash_balance}])])
     
-    # Create Chart
-    fig_holdings = px.pie(
-        holdings_with_cash,
-        values='Market Value',
-        names='Ticker',
-        title='Holdings Allocation',
-        hole=0.4, # Donut style
-        color_discrete_sequence=px.colors.qualitative.Set3
-    )
-    
-    # Clean Layout
-    fig_holdings.update_traces(
-        textposition='inside', # Force text inside slices
-        textinfo='percent+label'
-    )
-    fig_holdings.update_layout(
-        margin=dict(l=20, r=20, t=40, b=20), # Add margins
-        height=400,
-        legend=dict(
-            orientation="h",       # Horizontal legend
-            yanchor="bottom",
-            y=-0.2,                # Move below chart
-            xanchor="center",
-            x=0.5
-        )
-    )
-    
-    # --- 2. Sector Chart ---
+    fig_holdings = px.pie(holdings, values='Market Value', names='Ticker', title='Holdings', hole=0.4, color_discrete_sequence=px.colors.qualitative.Set3)
+    fig_holdings.update_traces(textposition='inside', textinfo='percent+label')
+    fig_holdings.update_layout(margin=dict(l=20,r=20,t=40,b=20), height=350, showlegend=False)
+
     sector_data = get_sector_allocation(portfolio_df)
-    
     if not sector_data.empty:
-        fig_sector = px.pie(
-            sector_data,
-            values='Value',
-            names='Sector',
-            title='Sector Allocation',
-            hole=0.4,
-            color_discrete_sequence=px.colors.qualitative.Pastel
-        )
-        fig_sector.update_traces(
-            textposition='inside',
-            textinfo='percent+label'
-        )
-        fig_sector.update_layout(
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=400,
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=-0.2,
-                xanchor="center",
-                x=0.5
-            )
-        )
+        fig_sector = px.pie(sector_data, values='Value', names='Sector', title='Sectors', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
+        fig_sector.update_traces(textposition='inside', textinfo='percent+label')
+        fig_sector.update_layout(margin=dict(l=20,r=20,t=40,b=20), height=350, showlegend=False)
     else:
         fig_sector = None
-    
     return fig_holdings, fig_sector
+
+# --- Main App Logic ---
+
+def main_app():
+    """The actual dashboard, only shown after login."""
+    
+    # Logout Button in Sidebar
+    with st.sidebar:
+        st.write(f"👤 Logged in as: **{st.session_state['username']}**")
+        if st.button("Logout", type="secondary"):
+            for key in ['logged_in', 'username', 'sheet_id']:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
+        st.divider()
+
+    client = get_google_sheets_client()
+    sheet_id = st.session_state['sheet_id']
+    
+    # Title
+    st.title(f"📈 Portfolio: {st.session_state['username'].capitalize()}")
+
+    # Sidebar - Add Transaction
+    st.sidebar.header("📝 Actions")
+    with st.sidebar.expander("➕ Add Transaction", expanded=False):
+        t_type = st.selectbox("Type", ['Buy', 'Sell', 'Deposit Cash', 'Withdraw Cash'])
+        t_date = st.date_input("Date", value=datetime.now())
+        if t_type in ['Buy', 'Sell']:
+            ticker = st.text_input("Ticker", "").upper()
+            qty = st.number_input("Qty", 0.0, step=0.01)
+            price = st.number_input("Price", 0.0, step=0.01)
+        else:
+            ticker = 'CASH'
+            qty = 1.0
+            price = st.number_input("Amount", 0.0, step=0.01)
+            
+        if st.button("Submit Transaction"):
+            data = {'Date': t_date, 'Ticker': ticker, 'Type': t_type, 'Quantity': qty, 'Price': price}
+            if add_transaction(client, sheet_id, data):
+                st.success("Added!")
+                time.sleep(0.5)
+                st.rerun()
+
+    # Load Data
+    with st.spinner("Loading your personal data..."):
+        transactions_df = load_transactions(client, sheet_id)
+    
+    if transactions_df.empty:
+        st.info("👋 Welcome! Your portfolio sheet is empty. Add a transaction to start.")
+        return
+
+    # Calculations
+    cash = calculate_cash_balance(transactions_df)
+    holdings = get_current_holdings(transactions_df)
+    
+    tickers = []
+    if not holdings.empty:
+        tickers = holdings['Ticker'].unique().tolist()
+    
+    with st.spinner("Fetching market data..."):
+        prices = fetch_live_prices(tickers)
+        
+    portfolio = build_portfolio_table(holdings, prices, cash)
+    metrics = calculate_portfolio_metrics(portfolio, cash, transactions_df)
+    
+    # KPI Row
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Value", f"${metrics['total_portfolio_value']:,.2f}")
+    c2.metric("Cash", f"${metrics['cash_balance']:,.2f}")
+    c3.metric("Return", f"${metrics['total_return_dollars']:,.2f}", f"{metrics['total_return_pct']:.2f}%")
+    c4.metric("Daily P&L", f"${metrics['daily_pnl']:,.2f}")
+    
+    # Table
+    st.subheader("💼 Holdings")
+    if not portfolio.empty:
+        disp = portfolio.copy()
+        for c in ['Avg Buy Price', 'Current Price', 'Market Value']:
+            disp[c] = disp[c].apply(lambda x: f"${x:,.2f}")
+        for c in ['% of Portfolio', 'Total Return %', 'Daily Return %', 'Alpha vs SPY']:
+            disp[c] = disp[c].apply(lambda x: f"{x:.2f}%")
+        st.dataframe(disp, use_container_width=True, hide_index=True)
+    
+    # Historical Chart
+    st.subheader("📈 Performance")
+    tf = st.selectbox("Timeframe", ['1W', '1M', 'YTD', '1Y', 'All'], index=2)
+    
+    if len(transactions_df) > 1:
+        hist_df = calculate_historical_portfolio_value(transactions_df, datetime.now() - timedelta(days=730))
+        chart = create_performance_chart(hist_df, tf)
+        if chart: st.plotly_chart(chart, use_container_width=True)
+        else: st.info("Not enough data for chart yet.")
+    else:
+        st.info("Add more transactions to see history.")
+
+    # Allocation
+    st.subheader("Allocation")
+    c1, c2 = st.columns(2)
+    h_chart, s_chart = create_allocation_charts(portfolio, cash)
+    if h_chart: c1.plotly_chart(h_chart, use_container_width=True)
+    if s_chart: c2.plotly_chart(s_chart, use_container_width=True)
 
 
 def main():
-    """Main application logic."""
-    
-    # Title
-    st.title("📈 Pro Portfolio Tracker")
-    st.markdown("*Real-time portfolio management & analytics*")
-    
-    # Get Google Sheets client
-    client = get_google_sheets_client()
-    
-    if client is None:
-        st.warning("⚠️ Please configure Google Sheets credentials to continue.")
-        st.info("""
-        **Setup Instructions:**
-        1. Create a Google Cloud project and enable Google Sheets API
-        2. Create a service account and download credentials JSON
-        3. Add credentials to Streamlit secrets or environment variable
-        4. Share your Google Sheet with the service account email
-        """)
-        return
-    
-    # Get sheet name from config
-    sheet_name = os.getenv('GOOGLE_SHEET_NAME', 'Portfolio Tracker')
-    
-    # Sidebar - Transaction Management
-    st.sidebar.header("📝 Transaction Management")
-    
-    with st.sidebar.expander("➕ Add Transaction", expanded=True):
-        transaction_type = st.selectbox(
-            "Type",
-            ['Buy', 'Sell', 'Deposit Cash', 'Withdraw Cash']
-        )
+    if 'logged_in' not in st.session_state:
+        st.session_state['logged_in'] = False
         
-        transaction_date = st.date_input(
-            "Date",
-            value=datetime.now()
-        )
-        
-        if transaction_type in ['Buy', 'Sell']:
-            ticker = st.text_input("Ticker (e.g., AAPL)", "").upper()
-            quantity = st.number_input("Quantity", min_value=0.0, step=0.01, value=1.0)
-            price = st.number_input("Price ($)", min_value=0.0, step=0.01, value=100.0)
-        else:
-            ticker = 'CASH'
-            quantity = 1.0
-            price = st.number_input("Amount ($)", min_value=0.0, step=0.01, value=1000.0)
-        
-        if st.button("Add Transaction", type="primary"):
-            if transaction_type in ['Buy', 'Sell'] and not ticker:
-                st.error("Please enter a ticker symbol")
-            else:
-                transaction_data = {
-                    'Date': transaction_date,
-                    'Ticker': ticker,
-                    'Type': transaction_type,
-                    'Quantity': quantity,
-                    'Price': price
-                }
-                
-                if add_transaction(client, sheet_name, transaction_data):
-                    st.success(f"✅ {transaction_type} transaction added!")
-                    st.rerun()
-    
-    with st.sidebar.expander("🔔 Set Price Alert"):
-        alert_ticker = st.text_input("Alert Ticker", "").upper()
-        target_price = st.number_input("Target Price ($)", min_value=0.0, step=0.01, value=100.0)
-        condition = st.selectbox("Condition", ['Above', 'Below'])
-        
-        if st.button("Create Alert"):
-            if not alert_ticker:
-                st.error("Please enter a ticker symbol")
-            else:
-                alert_data = {
-                    'Ticker': alert_ticker,
-                    'Target_Price': target_price,
-                    'Condition': condition
-                }
-                
-                if add_alert(client, sheet_name, alert_data):
-                    st.success("✅ Alert created!")
-                    st.rerun()
-    
-    # Load data
-    with st.spinner("Loading portfolio data..."):
-        transactions_df = load_transactions(client, sheet_name)
-    
-    if transactions_df.empty:
-        st.info("📊 No transactions found. Add your first transaction to get started!")
-        return
-    
-    # Calculate portfolio data
-    cash_balance = calculate_cash_balance(transactions_df)
-    holdings_df = get_current_holdings(transactions_df)
-    
-    if holdings_df.empty:
-        st.info("💰 You have ${:.2f} in cash. Start investing!".format(cash_balance))
-        return
-    
-    # Fetch live prices
-    tickers = holdings_df['Ticker'].unique().tolist()
-    
-    with st.spinner("Fetching live market data..."):
-        price_data = fetch_live_prices(tickers)
-    
-    # Build portfolio table
-    portfolio_df = build_portfolio_table(holdings_df, price_data, cash_balance)
-    metrics = calculate_portfolio_metrics(portfolio_df, cash_balance, transactions_df)
-    
-    # Top Metrics (KPIs)
-    st.markdown("## 📊 Portfolio Overview")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric(
-            "Total Portfolio Value",
-            f"${metrics['total_portfolio_value']:,.2f}"
-        )
-    
-    with col2:
-        st.metric(
-            "Cash Balance",
-            f"${metrics['cash_balance']:,.2f}"
-        )
-    
-    with col3:
-        delta_color = "normal" if metrics['total_return_dollars'] >= 0 else "inverse"
-        st.metric(
-            "Total Return",
-            f"${metrics['total_return_dollars']:,.2f}",
-            f"{metrics['total_return_pct']:.2f}%",
-            delta_color=delta_color
-        )
-    
-    with col4:
-        delta_color = "normal" if metrics['daily_pnl'] >= 0 else "inverse"
-        st.metric(
-            "Daily P&L",
-            f"${metrics['daily_pnl']:,.2f}",
-            delta_color=delta_color
-        )
-    
-    # Main Portfolio Table
-    st.markdown("## 💼 Holdings")
-    
-    # Format the dataframe for display
-    display_df = portfolio_df.copy()
-    
-    # Format currency columns
-    currency_cols = ['Avg Buy Price', 'Current Price', 'Market Value']
-    for col in currency_cols:
-        display_df[col] = display_df[col].apply(lambda x: f"${x:,.2f}")
-    
-    # Format percentage columns
-    pct_cols = ['% of Portfolio', 'Total Return %', 'Daily Return %', 'Alpha vs SPY']
-    for col in pct_cols:
-        display_df[col] = display_df[col].apply(lambda x: f"{x:.2f}%")
-    
-    # Display with highlighting
-    st.dataframe(
-        display_df,
-        use_container_width=True,
-        hide_index=True
-    )
-    
-    # Historical Performance Chart
-    st.markdown("## 📈 Historical Performance")
-    
-    col1, col2 = st.columns([3, 1])
-    
-    with col2:
-        timeframe = st.selectbox(
-            "Timeframe",
-            ['1W', '1M', 'YTD', '1Y', 'All'],
-            index=2
-        )
-    
-    # Calculate historical data
-    if timeframe == 'All':
-        start_date = transactions_df['Date'].min()
-    elif timeframe == 'YTD':
-        start_date = datetime(datetime.now().year, 1, 1)
-    elif timeframe == '1Y':
-        start_date = datetime.now() - timedelta(days=365)
-    elif timeframe == '1M':
-        start_date = datetime.now() - timedelta(days=30)
-    else:  # 1W
-        start_date = datetime.now() - timedelta(days=7)
-    
-    with st.spinner("Calculating historical performance..."):
-        historical_df = calculate_historical_portfolio_value(
-            transactions_df,
-            start_date
-        )
-    
-    if not historical_df.empty:
-        perf_chart = create_performance_chart(historical_df, timeframe)
-        if perf_chart:
-            st.plotly_chart(perf_chart, use_container_width=True)
+    if not st.session_state['logged_in']:
+        login_page()
     else:
-        st.info("Not enough historical data to display chart")
-    
-    # Allocation Charts
-    st.markdown("## 🥧 Portfolio Allocation")
-    
-    col1, col2 = st.columns(2)
-    
-    holdings_chart, sector_chart = create_allocation_charts(portfolio_df, cash_balance)
-    
-    with col1:
-        if holdings_chart:
-            st.plotly_chart(holdings_chart, use_container_width=True)
-    
-    with col2:
-        if sector_chart:
-            st.plotly_chart(sector_chart, use_container_width=True)
-        else:
-            st.info("Sector data not available")
-    
-    # Active Alerts
-    st.markdown("## 🔔 Active Alerts")
-    alerts_df = load_alerts(client, sheet_name)
-    
-    if not alerts_df.empty:
-        active_alerts = alerts_df[alerts_df['Email_Sent'] == 'False']
-        
-        if not active_alerts.empty:
-            st.dataframe(
-                active_alerts[['Ticker', 'Target_Price', 'Condition']],
-                use_container_width=True,
-                hide_index=True
-            )
-        else:
-            st.info("No active alerts")
-    else:
-        st.info("No alerts configured")
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("*Data updated in real-time • Powered by yfinance & Google Sheets*")
-
+        main_app()
 
 if __name__ == "__main__":
     main()
