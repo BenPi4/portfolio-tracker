@@ -94,7 +94,7 @@ def add_alert_to_sheet(ticker, target, condition):
         return False
     except: return False
 
-# --- CHARTING FUNCTIONS (FIXED!) ---
+# --- CHARTING FUNCTIONS ---
 def create_performance_chart(historical_df, timeframe):
     if historical_df.empty: return None
     today = datetime.now()
@@ -118,17 +118,17 @@ def create_performance_chart(historical_df, timeframe):
 def create_allocation_charts(portfolio_df, cash_balance):
     if portfolio_df.empty: return None, None
     
-    # 1. Holdings Chart (CLEANER)
+    # 1. Holdings Chart
     holdings = portfolio_df[['Ticker', 'Market Value']].copy()
     holdings_with_cash = pd.concat([holdings, pd.DataFrame([{'Ticker': 'Cash', 'Market Value': cash_balance}])])
     
     fig1 = px.pie(holdings_with_cash, values='Market Value', names='Ticker', title='Holdings', hole=0.5)
     
-    # Force text inside, and HIDE it if it's too small (prevents clutter)
+    # HIDE text if slice is too small
     fig1.update_traces(textposition='inside', textinfo='percent')
     fig1.update_layout(
-        uniformtext_minsize=12, 
-        uniformtext_mode='hide', # This is the magic fix for messiness
+        uniformtext_minsize=10, 
+        uniformtext_mode='hide', 
         showlegend=True,
         legend=dict(orientation="h", y=-0.2),
         margin=dict(t=40, b=40, l=20, r=20),
@@ -142,7 +142,7 @@ def create_allocation_charts(portfolio_df, cash_balance):
         fig2 = px.pie(sector_data, values='Value', names='Sector', title='Sectors', hole=0.5)
         fig2.update_traces(textposition='inside', textinfo='percent')
         fig2.update_layout(
-            uniformtext_minsize=12, 
+            uniformtext_minsize=10, 
             uniformtext_mode='hide',
             showlegend=True,
             legend=dict(orientation="h", y=-0.2),
@@ -161,8 +161,8 @@ if not st.session_state.logged_in:
     tab1, tab2 = st.tabs(["Login", "Sign Up"])
     
     with tab1:
-        u = st.text_input("Username", key="u")
-        p = st.text_input("Password", type="password", key="p")
+        u = st.text_input("Username", key="login_user")
+        p = st.text_input("Password", type="password", key="login_pass")
         if st.button("Login"):
             success, user_tab, alerts_tab = manager.login(u, p)
             if success:
@@ -173,9 +173,9 @@ if not st.session_state.logged_in:
             else: st.error("Login failed")
             
     with tab2:
-        nu = st.text_input("New User")
-        np = st.text_input("New Pass", type="password")
-        ne = st.text_input("Email")
+        nu = st.text_input("New User", key="sign_user")
+        np = st.text_input("New Pass", type="password", key="sign_pass")
+        ne = st.text_input("Email", key="sign_email")
         if st.button("Sign Up"):
             success, msg = manager.sign_up(nu, np, ne)
             if success: st.success(msg)
@@ -190,21 +190,26 @@ else:
         
     # Actions
     with st.sidebar.expander("➕ Add Transaction", expanded=True):
-        type_ = st.selectbox("Type", ['Buy', 'Sell', 'Deposit', 'Withdraw'])
-        date_ = st.date_input("Date")
-        ticker_ = st.text_input("Ticker").upper() if type_ in ['Buy', 'Sell'] else "CASH"
-        qty_ = st.number_input("Qty", 0.0) if type_ in ['Buy', 'Sell'] else 1.0
-        price_ = st.number_input("Price/Amount", 0.0)
-        if st.sidebar.button("Add"):
+        type_ = st.selectbox("Type", ['Buy', 'Sell', 'Deposit', 'Withdraw'], key="trans_type")
+        date_ = st.date_input("Date", key="trans_date")
+        
+        # Added keys to prevent duplicate ID error
+        ticker_ = st.text_input("Ticker", key="trans_ticker").upper() if type_ in ['Buy', 'Sell'] else "CASH"
+        qty_ = st.number_input("Qty", 0.0, key="trans_qty") if type_ in ['Buy', 'Sell'] else 1.0
+        price_ = st.number_input("Price/Amount", 0.0, key="trans_price")
+        
+        if st.sidebar.button("Add", key="btn_add_trans"):
             if add_user_transaction(date_, ticker_, type_, qty_, price_):
                 st.success("Added!")
                 st.rerun()
 
     with st.sidebar.expander("🔔 Set Alert"):
-        at = st.text_input("Ticker").upper()
-        ap = st.number_input("Target Price", 0.0)
-        ac = st.selectbox("Condition", ["Above", "Below"])
-        if st.sidebar.button("Set Alert"):
+        # Added keys to prevent duplicate ID error
+        at = st.text_input("Ticker", key="alert_ticker").upper()
+        ap = st.number_input("Target Price", 0.0, key="alert_price")
+        ac = st.selectbox("Condition", ["Above", "Below"], key="alert_cond")
+        
+        if st.sidebar.button("Set Alert", key="btn_set_alert"):
             if add_alert_to_sheet(at, ap, ac):
                 st.success("Alert Set!")
                 st.rerun()
@@ -238,14 +243,12 @@ else:
     # --- HOLDINGS TABLE (FIXED DECIMALS) ---
     st.markdown("### 💼 Holdings")
     
-    # 1. Round numbers in the data first
     display_df = port_df.copy()
     numeric_cols = ['Avg Buy Price', 'Current Price', 'Market Value', 'Daily P&L', 'Total Return', 'Daily Return %', 'Total Return %', '% of Portfolio']
     for col in numeric_cols:
         if col in display_df.columns:
             display_df[col] = pd.to_numeric(display_df[col], errors='coerce').fillna(0)
     
-    # 2. Display with Format
     st.dataframe(
         display_df.style.format({
             "Avg Buy Price": "${:,.2f}",
@@ -278,4 +281,10 @@ else:
     c1, c2 = st.columns(2)
     fig1, fig2 = create_allocation_charts(port_df, cash)
     if fig1: c1.plotly_chart(fig1, use_container_width=True)
-    if fig2: c2
+    if fig2: c2.plotly_chart(fig2, use_container_width=True)
+    
+    # Alerts Table
+    st.markdown("### 🔔 Active Alerts")
+    alerts = load_alerts()
+    if not alerts.empty:
+        st.dataframe(alerts, use_container_width=True, hide_index=True)
