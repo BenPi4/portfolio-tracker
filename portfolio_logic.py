@@ -214,9 +214,12 @@ def build_portfolio_table(holdings_df, price_data, cash_balance):
         
     df = pd.DataFrame(rows)
     if not df.empty:
-        total = df['Market Value'].sum() + cash_balance
-        if total > 0:
-            df['% of Portfolio'] = (df['Market Value'] / total * 100).round(2)
+        # Fix: For asset allocation %, use Total Assets (ignoring negative cash/margin)
+        # This prevents holdings from showing > 100% allocation
+        total_assets = df['Market Value'].sum() + max(0, cash_balance)
+        
+        if total_assets > 0:
+            df['% of Portfolio'] = (df['Market Value'] / total_assets * 100).round(2)
         else:
             df['% of Portfolio'] = 0.0
             

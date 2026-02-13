@@ -40,11 +40,23 @@ st.markdown("""
 # --- INITIALIZE MANAGER ---
 @st.cache_resource
 def get_manager():
-    if "gcp_service_account" in st.secrets:
-        return PortfolioManager(dict(st.secrets["gcp_service_account"]))
+    # 1. Check Local File First
     if os.path.exists('credentials.json'):
         return PortfolioManager('credentials.json')
-    st.error("Credentials not found.")
+
+    # 2. Check Secrets Second
+    try:
+        # Accessing st.secrets might raise FileNotFoundError if no secrets file exists
+        if "gcp_service_account" in st.secrets:
+            return PortfolioManager(dict(st.secrets["gcp_service_account"]))
+    except (FileNotFoundError, KeyError):
+        pass
+    except Exception as e:
+        # specific Streamlit error for secrets not found might vary, generic catch is safer for fallback
+        pass
+
+    # 3. Fallback
+    st.error("Credentials not found. Please provide 'credentials.json' locally or configure Streamlit secrets.")
     st.stop()
 
 manager = get_manager()
@@ -118,38 +130,57 @@ def create_performance_chart(historical_df, timeframe):
 def create_allocation_charts(portfolio_df, cash_balance):
     if portfolio_df.empty: return None, None
     
-    # 1. Holdings Chart
-    holdings = portfolio_df[['Ticker', 'Market Value']].copy()
-    holdings_with_cash = pd.concat([holdings, pd.DataFrame([{'Ticker': 'Cash', 'Market Value': cash_balance}])])
+    # 1. Prepare Data: Holdings Chart (Top 6 + Other)
+    # Ensure Market Value is numeric
+    portfolio_df['Market Value'] = pd.to_numeric(portfolio_df['Market Value'], errors='coerce').fillna(0)
     
-    fig1 = px.pie(holdings_with_cash, values='Market Value', names='Ticker', title='Holdings', hole=0.5)
+    # Sort by Market Value Descending
+    sorted_df = portfolio_df.sort_values(by='Market Value', ascending=False)
     
-    # HIDE text if slice is too small
-    fig1.update_traces(textposition='inside', textinfo='percent')
-    fig1.update_layout(
-        uniformtext_minsize=10, 
-        uniformtext_mode='hide', 
-        showlegend=True,
-        legend=dict(orientation="h", y=-0.2),
-        margin=dict(t=40, b=40, l=20, r=20),
-        height=350
-    )
+    # Extract Top 6
+    top_6 = sorted_df.head(6)[['Ticker', 'Market Value']].copy()
     
-    # 2. Sector Chart
+    # Calculate 'Other'
+    remaining = sorted_df.iloc[6:]
+    other_value = remaining['Market Value'].sum()
+    
+    # Create DataFrames to combine
+    parts = [top_6]
+    
+    if other_value > 0:
+        parts.append(pd.DataFrame([{'Ticker': 'Other', 'Market Value': other_value}]))
+        
+    if cash_balance > 0:
+        parts.append(pd.DataFrame([{'Ticker': 'Cash', 'Market Value': cash_balance}]))
+        
+    holdings_processed = pd.concat(parts, ignore_index=True)
+    
+    fig1 = px.pie(holdings_processed, values='Market Value', names='Ticker', title='Holdings', hole=0.5)
+    
+    # 2. Prepare Data: Sector Chart
     sector_data = get_sector_allocation(portfolio_df)
     fig2 = None
     if not sector_data.empty:
         fig2 = px.pie(sector_data, values='Value', names='Sector', title='Sectors', hole=0.5)
-        fig2.update_traces(textposition='inside', textinfo='percent')
-        fig2.update_layout(
-            uniformtext_minsize=10, 
-            uniformtext_mode='hide',
-            showlegend=True,
-            legend=dict(orientation="h", y=-0.2),
-            margin=dict(t=40, b=40, l=20, r=20),
-            height=350
-        )
-        
+
+    # Apply Consistent Styling to Both Charts
+    for fig in [fig1, fig2]:
+        if fig:
+            fig.update_traces(
+                textposition='inside',
+                textinfo='percent',
+                texttemplate='%{percent:.2%}',
+                hovertemplate='<b>%{label}</b><br>Value: $%{value:,.2f}<br>Share: %{percent:.2%}'
+            )
+            fig.update_layout(
+                uniformtext_minsize=10, 
+                uniformtext_mode='hide', 
+                showlegend=True,
+                legend=dict(orientation="h", y=-0.2, x=0.5, xanchor='center'),
+                margin=dict(t=40, b=40, l=20, r=20),
+                height=350
+            )
+            
     return fig1, fig2
 
 # ==========================================
@@ -259,6 +290,9 @@ else:
             "% of Portfolio": "{:.2f}%",
             "Alpha vs SPY": "{:.2f}%"
         }),
+        column_config={
+            "Qty": st.column_config.NumberColumn(format="%.4f")
+        },
         use_container_width=True,
         hide_index=True
     )
