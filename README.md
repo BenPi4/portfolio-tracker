@@ -284,4 +284,4 @@ streamlit run app.py
 
 ---
 
-**Built by Ben Pitkovsky** | [LinkedIn]([[https://linkedin.com/in/yourprofile](https://www.linkedin.com/in/ben-pitkovsky-914049379/)](https://www.linkedin.com/in/ben-pitkovsky-914049379/))
+**Built by Ben Pitkovsky** 
