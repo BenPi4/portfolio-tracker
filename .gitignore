@@ -2,3 +2,4 @@ credentials.json
 venv/
 .idea/
 __pycache__/
+.streamlit/

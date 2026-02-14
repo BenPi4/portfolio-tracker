@@ -75,8 +75,9 @@ class PortfolioManager:
 
     def login(self, username, password):
         """
-        Authenticates user and returns both their Transaction Tab and Alerts Tab.
+        Authenticates user and returns both their Transaction Tab and Alerts Tab + Email.
         """
+        print(f"DEBUG: NEW LOGIN EXECUTING for {username}")
         try:
             db_spreadsheet = self.client.open_by_key(self.USERS_DB_ID)
             db_sheet = None
@@ -93,28 +94,41 @@ class PortfolioManager:
                     
                     user_tab_name = record.get('Sheet_ID') 
                     
+                    # 1. Transaction Tab
                     try:
-                        # Get Transaction Tab
                         trans_tab = master_file.worksheet(user_tab_name)
-                        
-                        # Try to get Alerts Tab (derived from username)
-                        alerts_tab_name = user_tab_name.replace("User_", "Alerts_")
-                        try:
-                            alerts_tab = master_file.worksheet(alerts_tab_name)
-                        except:
-                            # If user is old and doesn't have an alerts tab yet
-                            alerts_tab = None 
-                            
-                        # RETURN 3 VALUES (Success)
-                        return True, trans_tab, alerts_tab
+                    except Exception as e:
+                        print(f"Error finding user tab: {e}")
+                        return False, None, None, None
+                    
+                    # 2. Alerts Tab
+                    alerts_tab_name = user_tab_name.replace("User_", "Alerts_")
+                    
+                    try:
+                        alerts_tab = master_file.worksheet(alerts_tab_name)
                     except:
-                        # RETURN 3 VALUES (Error finding tab)
-                        return False, None, None
+                        try:
+                             # Fallback for old style "Alerts_Ben" vs "Alerts_User_Ben" (just trying)
+                             alerts_tab = master_file.worksheet(f"Alerts_{username}")
+                        except:
+                            print("Alerts tab not found.")
+                            alerts_tab = None 
+                    
+                    # 3. Email
+                    user_email = record.get('Email', '')
+                    if not user_email: user_email = "unknown@email.com"
+                    
+                    print(f"DEBUG: LOGIN SUCCESS - Email: {user_email}")
+                    # RETURN 4 VALUES (Success, Trans, Alerts, Email)
+                    return True, trans_tab, alerts_tab, user_email
             
-            # RETURN 3 VALUES (User not found)
-            return False, None, None
+            # RETURN 4 VALUES (User not found)
+            print("Login failed: User not found")
+            return False, None, None, None
             
         except Exception as e:
-            print(f"Login error: {e}")
-            # RETURN 3 VALUES (General Error)
-            return False, None, None
+            print(f"Login error (EXCEPTION): {e}")
+            import traceback
+            traceback.print_exc()
+            # RETURN 4 VALUES (General Error)
+            return False, None, None, None

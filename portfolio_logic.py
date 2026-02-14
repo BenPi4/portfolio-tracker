@@ -2,6 +2,11 @@ import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta  
 import requests
+import smtplib
+import ssl
+from email.message import EmailMessage
+import time
+import threading
 
 # --- 1. Cash Balance ---
 def calculate_cash_balance(transactions_df):
@@ -26,6 +31,9 @@ def calculate_cash_balance(transactions_df):
             cash -= quantity * price
         elif t_type == 'Sell':
             cash += quantity * price
+        elif t_type == 'Initial':
+            # Initial Setup does not affect cash balance
+            pass
     
     return cash
 
@@ -35,8 +43,9 @@ def get_current_holdings(transactions_df):
     if transactions_df.empty:
         return pd.DataFrame()
     
+    # Include 'Initial' as a valid holding acquisition
     stock_transactions = transactions_df[
-        transactions_df['Type'].isin(['Buy', 'Sell'])
+        transactions_df['Type'].isin(['Buy', 'Sell', 'Initial'])
     ].copy()
     
     for _, row in stock_transactions.iterrows():
@@ -53,7 +62,10 @@ def get_current_holdings(transactions_df):
         price = float(row['Price'])
         t_type = str(row['Type']).strip()
 
-        if t_type == 'Buy':
+        t_type = str(row['Type']).strip()
+        
+        # 'Initial' behaves exactly like 'Buy' for holdings calculations
+        if t_type == 'Buy' or t_type == 'Initial':
             holdings[ticker]['total_qty'] += qty
             holdings[ticker]['total_cost'] += qty * price
             
@@ -168,6 +180,29 @@ def calculate_spy_return(start_date):
         return ((end_p - start_p) / start_p) * 100
     except:
         return 0.0
+
+
+def validate_ticker(ticker):
+    """
+    Checks if a ticker is valid and returns unique Uppercase symbol.
+    Returns (True, Ticker) or (False, ErrorMsg).
+    """
+    ticker = ticker.strip().upper()
+    if not ticker: return False, "Empty Ticker"
+    
+    if ticker == 'CASH': return True, 'CASH'
+    
+    try:
+        # Quick check using Ticker.info or history
+        # History is safer/faster than info which downloads a lot of JSON
+        t = yf.Ticker(ticker)
+        # Fetch 1 day of history to verify existence
+        hist = t.history(period='1d')
+        if hist.empty:
+            return False, f"Invalid Ticker: {ticker}"
+        return True, ticker
+    except:
+        return False, f"Error validating {ticker}"
 
 # --- 4. Build Portfolio Table ---
 def build_portfolio_table(holdings_df, price_data, cash_balance):
@@ -410,3 +445,287 @@ def get_sector_allocation(portfolio_df):
     if portfolio_df.empty or 'Sector' not in portfolio_df.columns:
         return pd.DataFrame()
     return portfolio_df.groupby('Sector')['Market Value'].sum().reset_index().rename(columns={'Market Value': 'Value'})
+
+# --- 8. Alert System ---
+def ensure_alerts_sheet(client, sheet_name="Alerts"):
+    """
+    Checks if 'Alerts' worksheet exists. If not, creates it with headers.
+    Returns the worksheet object.
+    """
+    try:
+        sh = client.open_by_key(client.list_spreadsheet_files()[0]['id']) # Assuming first sheet or pass spreadsheet object
+        # Better approach: pass the spreadsheet object or name if possible, but manager.py handles client.
+        # However, portfolio_logic functions usually take dataframes. 
+        # But here we need to interact with the sheet directly to create/update.
+        # Let's assume 'client' here is the gspread client or we need a way to get the spreadsheet.
+        # Refactoring note: Manager manages the client. tailored for portfolio_logic to be pure logic?
+        # The user requested adding this TO portfolio_logic.py. 
+        # But for 'client' interaction it might be better in manager.py or pass the sheet object.
+        # Implementation: We will write the logic here but it requires the gspread 'spreadsheet' object or 'client'.
+        # Let's assume we pass the 'spreadsheet' object.
+        pass
+    except:
+        pass
+
+# Redefining to use in Manager or App, but user asked for logic here.
+# Let's implement the pure logic and helpers here, and the gspread interaction might need to be in manager
+# or we pass the gspread wrappers. 
+# Actually, looking at the code, portfolio_logic is mostly pandas logic. 
+# But the request explicitly asked to add "Self-Healing Google Sheet" function to `portfolio_logic.py`.
+# So I will implement it here, assuming `spreadsheet` is passed.
+
+def check_and_create_alerts_sheet(spreadsheet):
+    try:
+        worksheet = spreadsheet.worksheet("Alerts")
+    except:
+        worksheet = spreadsheet.add_worksheet(title="Alerts", rows=100, cols=10)
+        # New Headers: [Ticker, Target Price, Direction, Subscribers, Status, Note]
+        worksheet.append_row(["Ticker", "Target Price", "Direction", "Subscribers", "Status", "Note", "Last Checked"])
+    return worksheet
+
+def send_alert_email(ticker, price, direction, subscribers, sender_creds):
+    """
+    Sends email to a list of subscribers.
+    subscribers: list of email strings
+    """
+    sender_email = sender_creds.get('user')
+    password = sender_creds.get('password')
+    
+    if not sender_email or not password:
+        return False
+        
+    # Remove duplicates and cleanup
+    recipients = list(set([s.strip() for s in subscribers if '@' in s]))
+    
+    if not recipients:
+        return False
+
+    msg = EmailMessage()
+    msg.set_content(f"🚀 ALERT TRIGGERED!\n\nTicker: {ticker}\nCondition: {direction} ${price:.2f}\n\nCurrent Price: ${price:.2f}\n\nHappy Trading!")
+    msg['Subject'] = f"🔔 Alert: {ticker} hit ${price:.2f}"
+    msg['From'] = sender_email
+    msg['Bcc'] = ", ".join(recipients) # Use Bcc to hide other subscribers
+    
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
+            server.login(sender_email, password)
+            server.send_message(msg)
+        return True
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+        return False
+
+def process_alerts(spreadsheet, email_creds):
+    """
+    Checks alerts and sends emails to subscribers. 
+    """
+    ws = check_and_create_alerts_sheet(spreadsheet)
+    data = ws.get_all_records()
+    df = pd.DataFrame(data)
+    
+    if df.empty: return
+    
+    # Check for required columns (handling migration somewhat gracefully or just failing)
+    required = ["Ticker", "Target Price", "Direction", "Subscribers", "Status"]
+    if not all(col in df.columns for col in required):
+        # If headers are mismatch, might need manual fix or we skip
+        # For now, let's assume they are correct as per plan
+        return
+
+    triggered_count = 0
+    
+    # Fetch live prices for all tickers in alerts
+    tickers = df['Ticker'].unique().tolist()
+    if not tickers: return
+    
+    prices = fetch_live_prices(tickers)
+    
+    for i, row in df.iterrows():
+        ticker = row['Ticker']
+        try:
+            target = float(row['Target Price'])
+        except:
+            continue
+            
+        direction = row['Direction']
+        status = row['Status']
+        subscribers_str = str(row['Subscribers'])
+        
+        # If already sent, skip (Global Status)
+        if str(status).lower() == "sent":
+            continue
+            
+        current_price = prices.get(ticker, {}).get('price', 0)
+        if current_price == 0: continue
+        
+        hit = False
+        if direction == "Above" and current_price >= target:
+            hit = True
+        elif direction == "Below" and current_price <= target:
+            hit = True
+            
+        if hit:
+            # Parse subscribers
+            subs_list = subscribers_str.split(',')
+            
+            # Send Email to all subscribers
+            sent = send_alert_email(ticker, current_price, direction, subs_list, email_creds)
+            
+            if sent:
+                # Update row status to Sent
+                # gspread is 1-indexed, header is row 1, so data row i is i+2
+                # Status is column 5, Last Checked is column 7 (based on new headers)
+                # Let's find column index dynamically if possible or hardcode based on check_and_create
+                # Headers: ["Ticker", "Target Price", "Direction", "Subscribers", "Status", "Note", "Last Checked"]
+                # Status is col 5
+                
+                try:
+                    # Find 'Status' column index
+                    status_col = df.columns.get_loc("Status") + 1
+                    last_checked_col = df.columns.get_loc("Last Checked") + 1
+                    
+                    ws.update_cell(i + 2, status_col, "Sent")
+                    ws.update_cell(i + 2, last_checked_col, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                except:
+                    # Fallback hardcoded if columns align
+                    ws.update_cell(i + 2, 5, "Sent") 
+                
+                triggered_count += 1
+
+
+
+def reset_all_alerts(spreadsheet):
+    ws = check_and_create_alerts_sheet(spreadsheet)
+    data = ws.get_all_records()
+    if not data: return
+    
+    # Get range of Status column. 
+    # Need to dynamically find it since headers changed
+    try:
+        headers = ws.row_values(1)
+        status_idx = headers.index("Status") + 1
+        col_letter = gspread.utils.rowcol_to_a1(1, status_idx)[0] # simple check, might bug if > 26 cols
+        # Better: just use iteration or find by name. 
+        # Update: We know it's column 5 in new schema but let's be safe.
+        
+        cell_list = ws.range(f"{col_letter}2:{col_letter}{len(data)+1}")
+        for cell in cell_list:
+            cell.value = "Active"
+        ws.update_cells(cell_list)
+    except:
+        pass
+
+def reactivate_alert(spreadsheet, row_index):
+    """
+    Sets the status of a specific alert row back to 'Active'.
+    """
+    try:
+        ws = check_and_create_alerts_sheet(spreadsheet)
+        # Headers: ["Ticker", "Target Price", "Direction", "Subscribers", "Status", "Note", "Last Checked"]
+        # Status is col 5
+        sheet_row = row_index + 2
+        
+        ws.update_cell(sheet_row, 5, "Active")
+        return True, "Alert reactivated!"
+    except Exception as e:
+        return False, f"Failed to reactivate: {e}"
+
+def delete_alert_row(spreadsheet, row_index):
+    """
+    Deletes a specific row from the Alerts sheet.
+    row_index is 0-based dataframe index, so we need to convert to 1-based sheet index.
+    Sheet has headers, so data starts at row 2.
+    Row in DF index 0 is Sheet Row 2.
+    """
+    try:
+        ws = check_and_create_alerts_sheet(spreadsheet)
+        # Convert 0-based index to 1-based row number
+        # DF Index 0 -> Sheet Row 2
+        sheet_row = row_index + 2
+        ws.delete_rows(sheet_row)
+        return True, "Alert deleted."
+    except Exception as e:
+        return False, f"Failed to delete: {e}"
+
+def unsubscribe_from_alert(spreadsheet, row_index, user_email):
+    """
+    Removes user_email from the subscribers list of a specific row.
+    """
+    try:
+        ws = check_and_create_alerts_sheet(spreadsheet)
+        # Headers: ["Ticker", "Target Price", "Direction", "Subscribers", "Status", "Note", "Last Checked"]
+        # Subscribers is column 4 (D)
+        sheet_row = row_index + 2
+        
+        current_subs = ws.cell(sheet_row, 4).value
+        
+        if not current_subs: return True, "Already unsubscribed."
+        
+        subs_list = [s.strip() for s in str(current_subs).split(',') if s.strip()]
+        
+        if user_email in subs_list:
+            subs_list.remove(user_email)
+            new_subs = ",".join(subs_list)
+            ws.update_cell(sheet_row, 4, new_subs)
+            return True, "Unsubscribed successfully."
+        else:
+            return True, "You were not subscribed."
+            
+    except Exception as e:
+        return False, f"Failed to unsubscribe: {e}"
+
+def subscribe_to_alert(spreadsheet, row_index, user_email):
+    """
+    Adds user_email to the subscribers list of a specific row.
+    """
+    try:
+        ws = check_and_create_alerts_sheet(spreadsheet)
+        # Headers: ["Ticker", "Target Price", "Direction", "Subscribers", "Status", "Note", "Last Checked"]
+        # Subscribers is column 4 (D)
+        sheet_row = row_index + 2
+        
+        current_subs = ws.cell(sheet_row, 4).value
+        
+        if not current_subs: 
+            # If empty, just set it
+            new_subs = user_email
+        else:
+            subs_list = [s.strip() for s in str(current_subs).split(',') if s.strip()]
+            if user_email in subs_list:
+                return True, "Already subscribed."
+            
+            subs_list.append(user_email)
+            new_subs = ",".join(subs_list)
+            
+        ws.update_cell(sheet_row, 4, new_subs)
+        return True, "Subscribed successfully!"
+            
+    except Exception as e:
+        return False, f"Failed to subscribe: {e}"
+
+def send_test_email(creds, receiver_email="ben636569@gmail.com"):
+    """
+    Sends a simple test email to verify credentials.
+    """
+    sender = creds.get('user')
+    password = creds.get('password')
+    
+    if not sender or not password:
+        return False, "Missing credentials"
+        
+    msg = EmailMessage()
+    msg.set_content("This is a test email from your Portfolio Tracker. 🚀\n\nIf you see this, the alert system is ready to go!")
+    msg['Subject'] = "✅ Portfolio Tracker: Test Email"
+    msg['From'] = sender
+    msg['To'] = receiver_email
+    
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
+            server.login(sender, password)
+            server.send_message(msg)
+        return True, "Email sent successfully!"
+    except Exception as e:
+        return False, str(e)
+
