@@ -308,4 +308,4 @@ This project showcases my ability to:
 
 ---
 
-**Built by Ben Pitkovsky** | [LinkedIn](https://linkedin.com/in/ben-pitkovsky) 
+**Built by Ben Pitkovsky** | [LinkedIn](https://www.linkedin.com/in/ben-pitkovsky-914049379/) 
