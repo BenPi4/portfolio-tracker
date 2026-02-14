@@ -32,7 +32,7 @@ from portfolio_logic import (
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Pro Portfolio Tracker",
+    page_title="Portfolio Tracker",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -318,7 +318,7 @@ def create_allocation_charts(portfolio_df, cash_balance):
 # ==========================================
 
 if not st.session_state.logged_in:
-    st.title("📈 Pro Portfolio Tracker")
+    st.title("Portfolio Tracker")
     tab1, tab2 = st.tabs(["Login", "Sign Up"])
     
     with tab1:
@@ -372,7 +372,10 @@ if not st.session_state.logged_in:
 
 else:
     # --- DASHBOARD ---
-    st.sidebar.title(f"👤 {st.session_state.user_tab.title}")
+    # Personalize Greeting
+    user_name = st.session_state.user_tab.title.replace("User_", "")
+    st.sidebar.title(f"Hello {user_name}")
+
     if st.sidebar.button("Logout"):
         st.session_state.logged_in = False
         st.rerun()
@@ -380,7 +383,7 @@ else:
     # Actions moved to main tabs
            
     # Test Email Button
-    if st.sidebar.button("✉️ Send Test Email"):
+    if st.sidebar.button("Send Test Email"):
         try:
             creds = {
                 'user': st.secrets["email"]["user"],
@@ -395,15 +398,15 @@ else:
             st.sidebar.error(f"Config Error: {e}")
 
     # Main Area
-    st.title("📈 Pro Portfolio Tracker")
+    st.title("Portfolio Tracker")
 
     st.divider()
 
     df = load_user_transactions()
     
     if df.empty:
-        st.info("👋 Welcome! Your portfolio is empty.")
-        st.markdown("### 🚀 Setup Your Portfolio")
+        st.info("Welcome! Your portfolio is empty.")
+        st.markdown("### Setup Your Portfolio")
         st.write("Add your initial holdings below. These will NOT affect your cash balance.")
         
         # Initialization Editor
@@ -447,11 +450,13 @@ else:
                 st.warning("Please add some rows.")
         st.stop()
         
+        st.stop()
+        
     # Edit Mode Toggle
-    edit_mode = st.toggle("✏️ Edit Mode")
+    edit_mode = st.toggle("Edit Mode")
     
     if edit_mode:
-        st.markdown("### 📝 Edit Transactions")
+        st.markdown("### Edit Transactions")
         st.info("Edit values directly in the table below. You can also delete rows using the checkbox on the left.")
         
         # Load Raw DF for editing
@@ -474,7 +479,7 @@ else:
             key="tx_editor"
         )
         
-        if st.button("💾 Save Changes"):
+        if st.button("Save Changes"):
             if update_user_transactions(edited_tx):
                 st.success("Changes saved to Google Sheets!")
                 st.rerun()
@@ -495,14 +500,26 @@ else:
     # Metrics
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Value", f"${metrics['total_portfolio_value']:,.2f}")
-    c2.metric("Cash", f"${metrics['cash_balance']:,.2f}")
+    
+    # Cash Styling (Red if negative)
+    cash_val = metrics['cash_balance']
+    if cash_val < 0:
+        c2.markdown(f"""
+        <div class="stMetric">
+            <label style="font-size: 14px;">Cash</label>
+            <div style="font-size: 2rem; font-weight: 600; color: #ff4b4b;">${cash_val:,.2f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        c2.metric("Cash", f"${cash_val:,.2f}")
+
     c3.metric("Return", f"${metrics['total_return_dollars']:,.2f}", f"{metrics['total_return_pct']:.2f}%")
     c4.metric("Daily P&L", f"${metrics['daily_pnl']:,.2f}")
     
     st.divider()
     
     # --- HOLDINGS TABLE (FIXED DECIMALS) ---
-    st.markdown("### 💼 Holdings")
+    st.markdown("### Holdings")
     
     display_df = port_df.copy()
     numeric_cols = ['Avg Buy Price', 'Current Price', 'Market Value', 'Daily P&L', 'Total Return', 'Daily Return %', 'Total Return %', '% of Portfolio']
@@ -510,6 +527,11 @@ else:
         if col in display_df.columns:
             display_df[col] = pd.to_numeric(display_df[col], errors='coerce').fillna(0)
     
+    # Conditional Formatting Function
+    def color_returns(val):
+        color = '#28a745' if val > 0 else '#dc3545' if val < 0 else None
+        return f'color: {color}'
+
     st.dataframe(
         display_df.style.format({
             "Avg Buy Price": "${:,.2f}",
@@ -519,7 +541,7 @@ else:
             "Total Return %": "{:.2f}%",
             "% of Portfolio": "{:.2f}%",
             "Alpha vs SPY": "{:.2f}%"
-        }),
+        }).map(color_returns, subset=['Total Return %', 'Daily Return %']),
         column_config={
             "Qty": st.column_config.NumberColumn(format="%.4f")
         },
@@ -530,8 +552,8 @@ else:
     st.divider()
     
     # --- MANAGE PORTFOLIO (New Location) ---
-    with st.expander("🛠️ Manage Portfolio (Add Transaction / Set Alert)", expanded=False):
-        act_t1, act_t2 = st.tabs(["➕ Add Transaction", "🔔 Set Alert"])
+    with st.expander("Manage Portfolio (Add Transaction / Set Alert)", expanded=False):
+        act_t1, act_t2 = st.tabs(["Add Transaction", "Set Alert"])
         
         with act_t1:
             c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1])
@@ -636,7 +658,7 @@ else:
             if is_creator:
                 # Reactivate if Sent
                 if str(row['Status']) == 'Sent':
-                    if c6.button("🔄 Reactivate", key=f"react_{i}"):
+                    if c6.button("Reactivate", key=f"react_{i}"):
                         try:
                             with st.spinner("Reactivating..."):
                                 spreadsheet = manager.client.open_by_key(manager.USERS_DB_ID)
@@ -648,7 +670,7 @@ else:
                                 else: st.error(msg)
                         except Exception as e: st.error(f"Error: {e}")
 
-                if c6.button("🗑️ Delete", key=f"del_{i}"):
+                if c6.button("Delete", key=f"del_{i}"):
                     try:
                         with st.spinner("Deleting..."):
                             spreadsheet = manager.client.open_by_key(manager.USERS_DB_ID)
