@@ -1,4 +1,4 @@
-# 📈 Pro Portfolio Tracker
+# Portfolio Tracker
 
 **Full-Stack Investment Portfolio Management Application**
 
