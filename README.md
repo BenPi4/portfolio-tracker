@@ -1,4 +1,4 @@
-# Portfolio Tracker
+# 📈 Pro Portfolio Tracker
 
 **Full-Stack Investment Portfolio Management Application**
 
@@ -284,4 +284,28 @@ streamlit run app.py
 
 ---
 
-**Built by Ben Pitkovsky** 
+## 📄 License
+
+MIT License - feel free to use this project as a reference or starting point for your own applications.
+
+---
+
+## 👨‍💻 About This Project
+
+This project showcases my ability to:
+- Build production-ready applications from scratch
+- Integrate multiple technologies and APIs
+- Solve complex technical challenges
+- Write clean, maintainable code
+- Deploy and maintain cloud applications
+
+**Perfect for demonstrating to potential employers:**
+- Full-stack development capabilities
+- Cloud platform experience
+- Financial domain knowledge
+- Problem-solving skills
+- Production deployment experience
+
+---
+
+**Built by Ben Pitkovsky** | [LinkedIn](https://linkedin.com/in/ben-pitkovsky) 
