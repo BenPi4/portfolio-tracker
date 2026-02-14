@@ -164,16 +164,74 @@ def update_user_transactions(df):
             else:
                 d = str(d)
                 
+            # Ensure proper decimal formatting
+            qty_val = float(row['Quantity'])
+            price_val = float(row['Price'])
+            
             update_data.append([
                 d,
                 str(row['Ticker']),
                 str(row['Type']),
-                float(row['Quantity']),
-                float(row['Price'])
+                qty_val,
+                price_val
             ])
             
+        # Clear and update with explicit formatting
         st.session_state.user_tab.clear()
-        st.session_state.user_tab.update('A1', update_data)
+        
+        # Use batch_update to preserve decimal precision
+        # First, update the data
+        st.session_state.user_tab.update('A1', update_data, value_input_option='USER_ENTERED')
+        
+        # Then, format columns D and E as numbers with decimals
+        try:
+            # Format Quantity column (D) to show 4 decimal places
+            # Format Price column (E) to show 2 decimal places
+            spreadsheet = st.session_state.user_tab.spreadsheet
+            sheet_id = st.session_state.user_tab.id
+            
+            requests = [{
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startColumnIndex": 3,  # Column D (Quantity)
+                        "endColumnIndex": 4,
+                        "startRowIndex": 1  # Skip header
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "numberFormat": {
+                                "type": "NUMBER",
+                                "pattern": "0.0000"
+                            }
+                        }
+                    },
+                    "fields": "userEnteredFormat.numberFormat"
+                }
+            }, {
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startColumnIndex": 4,  # Column E (Price)
+                        "endColumnIndex": 5,
+                        "startRowIndex": 1  # Skip header
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "numberFormat": {
+                                "type": "NUMBER",
+                                "pattern": "0.00"
+                            }
+                        }
+                    },
+                    "fields": "userEnteredFormat.numberFormat"
+                }
+            }]
+            
+            spreadsheet.batch_update({"requests": requests})
+        except Exception as format_error:
+            print(f"Warning: Could not format columns: {format_error}")
+            # Continue anyway - data is saved even if formatting fails
         st.cache_data.clear()
         return True
     except Exception as e:
@@ -447,7 +505,7 @@ else:
     
     if edit_mode:
         st.markdown("### Edit Transactions")
-        st.info("Edit values directly in the table below. You can also delete rows using the checkbox on the left.")
+        st.info("💡 **Tip:** When adding new holdings, use Type='Initial' to avoid affecting your cash balance. Use 'Buy'/'Sell' only for actual transactions.")
         
         # Load Raw DF for editing
         # We need to ensure types are editable
@@ -462,9 +520,9 @@ else:
             column_config={
                 "Date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
                 "Ticker": st.column_config.TextColumn("Ticker", required=True),
-                "Type": st.column_config.SelectboxColumn("Type", options=["Buy", "Sell", "Deposit Cash", "Withdraw Cash", "Initial"], required=True),
-                "Quantity": st.column_config.NumberColumn("Quantity", min_value=0),
-                "Price": st.column_config.NumberColumn("Price/Amount", min_value=0, format="$%.2f")
+                "Type": st.column_config.SelectboxColumn("Type", options=["Initial", "Buy", "Sell", "Deposit Cash", "Withdraw Cash"], required=True),
+                "Quantity": st.column_config.NumberColumn("Quantity", min_value=0, step=0.0001),
+                "Price": st.column_config.NumberColumn("Price/Amount", min_value=0, step=0.01, format="$%.2f")
             },
             key="tx_editor"
         )
@@ -487,8 +545,8 @@ else:
     port_df = build_portfolio_table(holdings, prices, cash)
     metrics = calculate_portfolio_metrics(port_df, cash, df)
     
-    # Metrics
-    c1, c2, c3, c4 = st.columns(4)
+    # Metrics - 5 columns
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Total Value", f"${metrics['total_portfolio_value']:,.2f}")
     
     # Cash Styling (Red if negative)
@@ -503,8 +561,9 @@ else:
     else:
         c2.metric("Cash", f"${cash_val:,.2f}")
 
-    c3.metric("Return", f"${metrics['total_return_dollars']:,.2f}", f"{metrics['total_return_pct']:.2f}%")
-    c4.metric("Daily P&L", f"${metrics['daily_pnl']:,.2f}")
+    c3.metric("Deposited", f"${metrics['total_deposited']:,.2f}")
+    c4.metric("Return", f"${metrics['total_return_dollars']:,.2f}", f"{metrics['total_return_pct']:.2f}%")
+    c5.metric("Daily P&L", f"${metrics['daily_pnl']:,.2f}")
     
     st.divider()
     

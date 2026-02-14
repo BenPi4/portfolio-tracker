@@ -271,25 +271,35 @@ def calculate_portfolio_metrics(portfolio_df, cash_balance, transactions_df):
         mkt_val = portfolio_df['Market Value'].sum()
         daily_pnl = (portfolio_df['Market Value'] * (portfolio_df['Daily Return %'] / 100)).sum()
     
-    invested = 0.0
+    # Calculate Total Deposited: Initial positions + Deposit Cash - Withdraw Cash
+    total_deposited = 0.0
     if not transactions_df.empty:
         for _, r in transactions_df.iterrows():
             t_type = str(r['Type']).strip()
             try:
                 price = float(r['Price'])
+                quantity = float(r['Quantity']) if 'Quantity' in r else 0.0
             except:
                 price = 0.0
+                quantity = 0.0
                 
-            if t_type == 'Deposit Cash': invested += price
-            elif t_type == 'Withdraw Cash': invested -= price
+            if t_type == 'Deposit Cash': 
+                total_deposited += price
+            elif t_type == 'Withdraw Cash': 
+                total_deposited -= price
+            elif t_type == 'Initial':
+                # Add cost basis of initial positions
+                total_deposited += (quantity * price)
+            # Note: Buy/Sell don't affect total_deposited, they just move money between cash and holdings
             
     total_val = mkt_val + cash_balance
-    ret_dol = total_val - invested
-    ret_pct = (ret_dol / invested * 100) if invested > 0 else 0.0
+    ret_dol = total_val - total_deposited
+    ret_pct = (ret_dol / total_deposited * 100) if total_deposited > 0 else 0.0
     
     return {
         'total_portfolio_value': total_val,
         'cash_balance': cash_balance,
+        'total_deposited': total_deposited,
         'total_return_dollars': ret_dol,
         'total_return_pct': ret_pct,
         'daily_pnl': daily_pnl
